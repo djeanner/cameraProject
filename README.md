@@ -88,7 +88,11 @@ Send a string command to the trigger port (default 9999) via TCP. This will save
 Example using `nc` (netcat):
 
 ```bash
-echo "save" | nc <pi_ip> 9999
+echo "night_level" | nc <pi_ip> 9999
+
+echo "night_level" | nc raspberrypi 9999
+echo "save png" | nc raspberrypi 9999
+echo "save jpg" | nc raspberrypi 9999
 ```
 
 ## Notes
@@ -98,5 +102,4 @@ echo "save" | nc <pi_ip> 9999
 * Exporter supports stacking frames to improve image brightness for low-light captures.
 * Images are timestamped and numbered to maintain order.
 * This project is optimized for Python 3.11 features like type hints, `match/case`, and `dataclasses(kw_only=True)`.
-
 
