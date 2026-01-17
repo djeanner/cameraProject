@@ -23,8 +23,23 @@ exporter = Exporter(cfg["export"])
 cam = CameraController(cfg["camera"], ring)
 night_ctrl = NightModeController(cfg["night"])
 
+def log_mode_change(old: dict | None, new: dict) -> None:
+    logging.info("Camera configuration updated:")
+    if old is None:
+        for k, v in new.items():
+            logging.info(f"  {k}: {v}")
+        return
+
+    for k in new:
+        if old.get(k) != new.get(k):
+            logging.info(f"  {k}: {old.get(k)} → {new.get(k)}")
+            
 # Start in day mode (as per config)
+prev_desc = cam.describe_mode()
 cam.start_video()
+desc = cam.describe_mode()
+log_mode_change(prev_desc, desc)
+prev_desc = desc
 
 CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 2.0)
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -81,19 +96,25 @@ while True:
         future = executor.submit(cam.capture_once)
         future.result(timeout=CAPTURE_TIMEOUT)
 
-        # Update night detector using last frame
+        event = None
         if ring.buffer:
             img, meta = ring.buffer[-1]
             event = night_ctrl.update(meta.dark_score)
 
-            if event == "ENTER" and cfg["night"]["enable"]:
-                if cfg["night"]["mode"] == "still":
-                    logging.info("Night detected → switching to STILL mode")
-                    cam.start_still(cfg["night"])
+        if event == "ENTER" and cfg["night"]["enable"] and cam.mode != "still":
+            if cfg["night"]["mode"] == "still":
+                logging.info("Night detected")
+                before = cam.describe_mode()
+                cam.start_still(cfg["night"])
+                after = cam.describe_mode()
+                log_mode_change(before, after)
 
-            elif event == "EXIT":
-                logging.info("Day detected → switching to VIDEO mode")
-                cam.start_video()
+        elif event == "EXIT" and cam.mode != "video":
+            logging.info("Day detected")
+            before = cam.describe_mode()
+            cam.start_video()
+            after = cam.describe_mode()
+            log_mode_change(before, after)
 
     except concurrent.futures.TimeoutError:
         logging.warning("Camera capture timed out, skipping frame")

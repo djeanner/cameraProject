@@ -1,0 +1,291 @@
+===== pi_cam_service_py311/config.json =====
+
+{
+  "camera": {
+    "width": 1024,
+    "height": 768,
+    "framerate": 10,
+    "codec": "rgb",
+    "video_mode": "stream"
+  },
+  "ring": {
+    "size": 300
+  },
+  "night": {
+    "enable": true,
+    "dark_threshold": 35,
+    "bright_threshold": 55,
+    "min_dark_frames": 20,
+    "mode": "still",
+    "exposure_us": 2000000,
+    "gain": 6.0
+  },
+  "export": {
+    "base_dir": "./captures",
+    "formats": [
+      "jpg",
+      "png"
+    ],
+    "save_before_s": 5,
+    "save_after_s": 3,
+    "stack_dark_frames": true,
+    "stack_count": 4,
+    "auto_save_interval_s": 3600
+  },
+  "network": {
+    "trigger_port": 9999
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}===== pi_cam_service_py311/camera_controller.py =====
+
+import time, numpy as np
+from picamera2 import Picamera2
+from metadata import FrameMetadata
+from typing import Tuple
+
+class CameraController:
+    def __init__(self, cfg: dict, ring) -> None:
+        self.cfg = cfg
+        self.ring = ring
+        self.cam = Picamera2()
+        self.frame_id = 0
+        self.night = False
+
+    def start_video(self) -> None:
+        cfg = self.cam.create_video_configuration(
+            main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
+            controls={"FrameRate": self.cfg["framerate"]}
+        )
+        self.cam.configure(cfg)
+        self.cam.start()
+
+    def stop(self) -> None:
+        self.cam.stop()
+
+    def capture_loop(self) -> None:
+        while True:
+            self.capture_once()
+
+    def capture_once(self) -> None:
+        """Capture a single frame and append to ring buffer."""
+        img: np.ndarray = self.cam.capture_array()
+        ts = time.time()
+        score: float = float(np.mean(img))
+        meta = FrameMetadata(frame_id=self.frame_id, timestamp=ts, dark_score=score, night_mode=self.night)
+        self.ring.append((img, meta))
+        self.frame_id += 1
+===== pi_cam_service_py311/exporter.py =====
+
+
+import os
+import cv2
+import numpy as np
+from datetime import datetime
+from typing import List, Tuple
+from metadata import FrameMetadata
+
+class Exporter:
+    def __init__(self, cfg: dict) -> None:
+        self.cfg = cfg
+        self.base_dir = os.path.abspath(cfg["base_dir"])
+        os.makedirs(self.base_dir, exist_ok=True)
+
+    def save(self, frames: List[Tuple[np.ndarray, FrameMetadata]], formats: list[str] | None = None) -> list[str]:
+        saved: list[str] = []
+        use_formats = formats if formats is not None else self.cfg["formats"]
+        for img, meta in frames:
+            ts = datetime.fromtimestamp(meta.timestamp).strftime("%Y%m%d_%H%M%S")
+            base = f"{ts}_f{meta.frame_id}"
+            if "jpg" in use_formats:
+                fn = os.path.join(self.base_dir, base + ".jpg")
+                cv2.imwrite(fn, img)
+                saved.append(fn)
+            if "png" in use_formats:
+                fn = os.path.join(self.base_dir, base + ".png")
+                cv2.imwrite(fn, img)
+                saved.append(fn)
+            if "npy" in use_formats:
+                fn = os.path.join(self.base_dir, base + ".npy")
+                np.save(fn, img)
+                saved.append(fn)
+        return saved
+
+    def stack_and_save(self, frames: List[Tuple[np.ndarray, FrameMetadata]], formats: list[str] | None = None) -> list[str]:
+        if not frames:
+            return []
+        imgs = [f[0].astype("float32") for f in frames]
+        stacked = sum(imgs) / len(imgs)
+        stacked = stacked.clip(0, 255).astype("uint8")
+        return self.save([(stacked, frames[-1][1])], formats)
+===== pi_cam_service_py311/main.py =====
+
+import json
+import logging
+import time
+import concurrent.futures
+
+from ring_buffer import RingBuffer
+from camera_controller import CameraController
+from exporter import Exporter
+from trigger_server import TriggerServer
+
+# Load configuration
+with open("config.json") as f:
+    cfg: dict = json.load(f)
+
+logging.basicConfig(level=cfg["logging"]["level"])
+
+# Initialize components
+ring = RingBuffer(cfg["ring"]["size"])
+exporter = Exporter(cfg["export"])
+cam = CameraController(cfg["camera"], ring)
+cam.start_video()
+
+# Auto-save tracking
+last_auto_save = 0.0
+CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 2.0)  # default 2s timeout
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+
+def on_trigger(cmd: str) -> str:
+    cmd = cmd.strip()
+
+    if cmd.startswith("save"):
+        parts = cmd.split()
+        formats = parts[1:] if len(parts) > 1 else None
+        frames = ring.get_last_seconds(cfg["export"]["save_before_s"], cfg["camera"]["framerate"])
+        if not frames:
+            return "NO_FRAMES"
+        if cfg["export"]["stack_dark_frames"]:
+            used = frames[-cfg["export"]["stack_count"]:]
+            saved = exporter.stack_and_save(used) if formats is None else exporter.save([(used[-1][0], used[-1][1])], formats)
+        else:
+            saved = exporter.save(frames, formats)
+        return "SAVED:" + ",".join(saved) if saved else "NOT_SAVED"
+
+    if cmd == "night_level":
+        if not ring.buffer:
+            return "NO_DATA"
+        meta = ring.buffer[-1][1]
+        thr = cfg["night"]["dark_threshold"]
+        status = "NIGHT" if meta.dark_score < thr else "DAY"
+        return f"LEVEL={meta.dark_score:.1f} THRESH={thr} STATUS={status}"
+
+    return "UNKNOWN_COMMAND"
+
+
+# Start the trigger server
+TriggerServer(cfg["network"]["trigger_port"], on_trigger).start()
+logging.info("Trigger server started")
+
+# Main loop with timeout handling
+logging.info("Starting main capture loop")
+while True:
+    try:
+        # Run capture in a separate thread with timeout
+        future = executor.submit(cam.capture_once)
+        future.result(timeout=CAPTURE_TIMEOUT)
+    except concurrent.futures.TimeoutError:
+        logging.warning("Camera capture timed out! Skipping this frame.")
+        continue
+    except Exception as e:
+        logging.error(f"Camera capture failed: {e}")
+        time.sleep(1)
+        continue
+
+    # Auto-save logic
+    now = time.time()
+    interval = cfg["export"].get("auto_save_interval_s", 0)
+    if interval > 0 and now - last_auto_save >= interval:
+        frames = ring.get_last(1)
+        if frames:
+            try:
+                saved = exporter.save(frames)
+                logging.info(f"Hourly auto-save: {saved}")
+            except Exception as e:
+                logging.error(f"Auto-save failed: {e}")
+        last_auto_save = now
+===== pi_cam_service_py311/metadata.py =====
+
+
+from dataclasses import dataclass
+
+@dataclass(kw_only=True)
+class FrameMetadata:
+    frame_id: int
+    timestamp: float
+    dark_score: float
+    night_mode: bool
+===== pi_cam_service_py311/night_mode.py =====
+
+
+class NightModeController:
+    def __init__(self, cfg: dict) -> None:
+        self.cfg = cfg
+        self.dark_count = 0
+        self.active = False
+
+    def update(self, score: float) -> str | None:
+        if score < self.cfg["dark_threshold"]:
+            self.dark_count += 1
+        else:
+            self.dark_count = 0
+
+        match (self.active, self.dark_count >= self.cfg["min_dark_frames"]):
+            case (False, True):
+                self.active = True
+                return "ENTER"
+            case (True, False) if score > self.cfg["bright_threshold"]:
+                self.active = False
+                return "EXIT"
+            case _:
+                return None
+===== pi_cam_service_py311/ring_buffer.py =====
+
+
+from collections import deque
+import threading
+from typing import Tuple, List
+import numpy as np
+from metadata import FrameMetadata
+
+class RingBuffer:
+    def __init__(self, size: int) -> None:
+        self.buffer: deque[Tuple[np.ndarray, FrameMetadata]] = deque(maxlen=size)
+        self.lock = threading.Lock()
+
+    def append(self, item: Tuple[np.ndarray, FrameMetadata]) -> None:
+        with self.lock:
+            self.buffer.append(item)
+
+    def get_last(self, n: int) -> List[Tuple[np.ndarray, FrameMetadata]]:
+        with self.lock:
+            return list(self.buffer)[-n:]
+
+    def get_last_seconds(self, seconds: int, fps: int) -> List[Tuple[np.ndarray, FrameMetadata]]:
+        return self.get_last(int(seconds * fps))
+===== pi_cam_service_py311/trigger_server.py =====
+
+import socket
+import threading
+from typing import Callable
+
+class TriggerServer(threading.Thread):
+    def __init__(self, port: int, callback: Callable[[str], str]) -> None:
+        super().__init__(daemon=True)
+        self.port = port
+        self.callback = callback
+
+    def run(self) -> None:
+        s = socket.socket()
+        s.bind(("", self.port))
+        s.listen(5)
+        while True:
+            conn, _ = s.accept()
+            cmd = conn.recv(1024).decode().strip()
+            response = self.callback(cmd)
+            # Proper newline handling
+            conn.sendall((response + "\n").encode())
+            conn.close()
