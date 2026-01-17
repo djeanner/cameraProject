@@ -101,9 +101,26 @@ The `stack_dark_frames` option in the exporter further enhances low-light images
 
 * Ring buffer stores recent frames.
 * Stacking improves low-light images.
-* Hourly auto-save saves last captured frame automatically.
 * Images timestamped and numbered.
 * Optimized for Python 3.11 features: type hints, match/case, dataclasses(kw_only=True).
+
+## Night Mode and Stacking
+
+The night mode automatically adjusts the camera behavior when lighting conditions are low. Compared to normal daytime operation, night mode can:
+
+* Increase exposure time (`exposure_us`) and sensor gain (`gain`) to capture brighter images in dark conditions.
+* Switch the camera mode to `'still'` or `'slow_video'` depending on configuration, allowing longer exposures without dropping frames.
+* When switching modes, the service logs exactly which camera parameters changed (mode, framerate, exposure, gain), helping with monitoring and debugging.
+* Trigger only after a configurable number of consecutive dark frames (`min_dark_frames`) to avoid false positives during brief shadows or flickers.
+
+The `stack_dark_frames` option in the exporter further enhances low-light images. When enabled, it combines (`stacks`) multiple consecutive frames into a single image, averaging pixel values. This reduces noise and improves visibility while preserving details, similar to long-exposure photography, without increasing the actual exposure time of each frame.
+
+### Auto-Save Behavior
+
+* The automatic save interval (`auto_save_interval_s`) periodically saves the most recent frame.
+  - If the camera is in day mode, a normal video frame is saved.
+  - If the camera is in night mode, the save captures the long-exposure still frame.
+
 
 ## Update python program
 
