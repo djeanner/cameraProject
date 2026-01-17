@@ -133,6 +133,7 @@ The `stack_dark_frames` option in the exporter further enhances low-light images
    ```bash
    scp -rp dan@raspberrypi://home/dan/pi_cam_service/captures .
 
-   rsync -avz --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
-
+   rsync -av --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
+   echo "limit bandwidth in KB/s"
+   rsync -av --bwlimit=100 --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
    ```
