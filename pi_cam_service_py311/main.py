@@ -20,17 +20,29 @@ last_dark_score = 0.0
 
 def on_trigger(cmd: str) -> str | None:
     if cmd == "save":
-        frames = ring.get_last_seconds(cfg["export"]["save_before_s"], cfg["camera"]["framerate"])
-        saved_files: list[str] = []
+        frames = ring.get_last_seconds(
+            cfg["export"]["save_before_s"],
+            cfg["camera"]["framerate"]
+        )
+
+        if not frames:
+            return "NO_FRAMES"
+
         if cfg["export"]["stack_dark_frames"]:
-            saved_files = exporter.stack_and_save(frames[-cfg["export"]["stack_count"]:])
+            used = frames[-cfg["export"]["stack_count"]:]
+            saved_files = exporter.stack_and_save(used)
         else:
             saved_files = exporter.save(frames)
+
+        if not saved_files:
+            return "NOT_SAVED"
+
         return "SAVED:" + ",".join(saved_files)
 
     elif cmd == "night_level":
         if not ring.buffer:
-            return "NO DATA"
+            return "NO_DATA"
+
         meta = ring.buffer[-1][1]
         thr = cfg["night"]["dark_threshold"]
         status = "NIGHT" if meta.dark_score < thr else "DAY"
