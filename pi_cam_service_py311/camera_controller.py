@@ -24,9 +24,13 @@ class CameraController:
 
     def capture_loop(self) -> None:
         while True:
-            img: np.ndarray = self.cam.capture_array()
-            ts = time.time()
-            score: float = float(np.mean(img))
-            meta = FrameMetadata(frame_id=self.frame_id, timestamp=ts, dark_score=score, night_mode=self.night)
-            self.ring.append((img, meta))
-            self.frame_id += 1
+            self.capture_once()
+
+    def capture_once(self) -> None:
+        """Capture a single frame and append to ring buffer."""
+        img: np.ndarray = self.cam.capture_array()
+        ts = time.time()
+        score: float = float(np.mean(img))
+        meta = FrameMetadata(frame_id=self.frame_id, timestamp=ts, dark_score=score, night_mode=self.night)
+        self.ring.append((img, meta))
+        self.frame_id += 1

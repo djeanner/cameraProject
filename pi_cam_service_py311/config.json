@@ -27,7 +27,8 @@
     "save_before_s": 5,
     "save_after_s": 3,
     "stack_dark_frames": true,
-    "stack_count": 4
+    "stack_count": 4,
+    "auto_save_interval_s": 3600
   },
   "network": {
     "trigger_port": 9999

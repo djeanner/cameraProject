@@ -1,8 +1,9 @@
-import socket, threading
+import socket
+import threading
 from typing import Callable
 
 class TriggerServer(threading.Thread):
-    def __init__(self, port: int, callback: Callable[[str], str | None]) -> None:
+    def __init__(self, port: int, callback: Callable[[str], str]) -> None:
         super().__init__(daemon=True)
         self.port = port
         self.callback = callback
@@ -15,6 +16,6 @@ class TriggerServer(threading.Thread):
             conn, _ = s.accept()
             cmd = conn.recv(1024).decode().strip()
             response = self.callback(cmd)
-            if response is not None:
-                conn.sendall(response.encode())
+            # Proper newline handling
+            conn.sendall((response + "\n").encode())
             conn.close()
