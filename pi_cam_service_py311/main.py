@@ -6,7 +6,7 @@ from exporter import Exporter
 from trigger_server import TriggerServer
 
 with open("config.json") as f:
-    cfg = json.load(f)
+    cfg: dict = json.load(f)
 
 logging.basicConfig(level=cfg["logging"]["level"])
 
@@ -18,11 +18,9 @@ cam.start_video()
 
 night = NightModeController(cfg["night"])
 
-def on_trigger(cmd):
+def on_trigger(cmd: str) -> None:
     logging.info(f"Trigger: {cmd}")
-    frames = ring.get_last_seconds(
-        cfg["export"]["save_before_s"], cfg["camera"]["framerate"]
-    )
+    frames = ring.get_last_seconds(cfg["export"]["save_before_s"], cfg["camera"]["framerate"])
     if cfg["export"]["stack_dark_frames"]:
         exporter.stack_and_save(frames[-cfg["export"]["stack_count"]:])
     else:
