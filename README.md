@@ -74,6 +74,7 @@ Adjusting these values lets you control camera behavior, night mode logic, image
 
 1. Start the service:
 ```bash
+cd pi_cam_service
 python3 main.py
 ```
 2. Continuous capture to ring buffer.
