@@ -1,31 +1,25 @@
 # cameraProject
-Python project for camera control
-pi_cam_service.zip
 
-trigger event to save images with  
-```bash
-echo SNAP | nc raspberrypi 9999
-```
+Python project for camera control.
 
-# Pi Cam Service (Python 3.11) Manual
 
 ## Overview
 
-This project is a Python 3.11-based Pi camera service designed for continuous video streaming, night mode, ring buffer capture, and flexible image export. The system is modular and allows integration with external triggers or object detection processes.
+Python 3.11-based Pi camera service for continuous video streaming, night mode, ring buffer, flexible image export, and hourly auto-save.
 
 ## Project Structure
 
-| File                   | Purpose                                                                                               |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- |
-| `config.json`          | JSON configuration for camera, ring buffer, night mode, export options, network trigger, and logging. |
-| `ring_buffer.py`       | Thread-safe ring buffer storing recent frames along with metadata.                                    |
-| `metadata.py`          | `FrameMetadata` dataclass storing frame ID, timestamp, dark score, and night mode flag.               |
-| `night_mode.py`        | Controller that determines when to enter or exit night mode based on brightness analysis.             |
-| `exporter.py`          | Handles saving frames in multiple formats and optionally stacks dark frames before saving.            |
-| `trigger_server.py`    | Network-based trigger server to save recent frames on-demand.                                         |
-| `camera_controller.py` | Controls PiCamera2 for continuous video capture, feeding frames into the ring buffer.                 |
-| `main.py`              | Orchestrates camera, night mode controller, ring buffer, exporter, and trigger server.                |
-| `requirements.txt`     | Lists required Python packages: `picamera2`, `numpy`, `opencv-python`                                 |
+| File                   | Purpose |
+|------------------------|---------|
+| `config.json`          | Camera, ring buffer, night mode, export, network trigger, logging configuration |
+| `ring_buffer.py`       | Thread-safe ring buffer with metadata |
+| `metadata.py`          | FrameMetadata dataclass |
+| `night_mode.py`        | Night mode controller based on brightness |
+| `exporter.py`          | Save frames, optionally stack dark frames |
+| `trigger_server.py`    | Network trigger server |
+| `camera_controller.py` | PiCamera2 control, feeds ring buffer |
+| `main.py`              | Orchestrates camera, night mode, ring buffer, exporter, triggers, and hourly auto-save |
+| `requirements.txt`     | `picamera2`, `numpy`, `opencv-python` |
 
 ## Installation
 
@@ -45,61 +39,82 @@ This project is a Python 3.11-based Pi camera service designed for continuous vi
 
 ## Configuration (`config.json`)
 
+The `config.json` file centralizes all configurable aspects of the Pi Cam Service. It includes:
+
 * `camera`: Camera parameters
-
-  * `width`, `height`: Resolution
-  * `framerate`: Capture FPS
-  * `codec`: 'rgb' (or h264, if supported)
-  * `video_mode`: 'stream' or 'still'
-* `ring`: Ring buffer size (number of frames)
+  * `width`, `height`: Resolution in pixels
+  * `framerate`: Capture frames per second
+  * `codec`: 'rgb' (or 'h264', if supported)
+  * `video_mode`: 'stream' for continuous video, 'still' for single image captures
+* `ring`: Ring buffer configuration
+  * `size`: Number of frames to store in memory
 * `night`: Night mode parameters
-
-  * `enable`: Enable night mode logic
-  * `dark_threshold`: Frame dark score to consider dark
-  * `bright_threshold`: Score to exit night mode
-  * `min_dark_frames`: Number of consecutive dark frames to enter night mode
-  * `mode`: 'still' or 'slow_video'
-  * `exposure_us`, `gain`: Camera exposure and gain during night mode
+  * `enable`: Enable or disable night mode
+  * `dark_threshold`: Frame dark score below which the system considers it night
+  * `bright_threshold`: Frame brightness above which the system exits night mode
+  * `min_dark_frames`: Number of consecutive dark frames needed to enter night mode
+  * `mode`: 'still' or 'slow_video', defining camera behavior in night mode
+  * `exposure_us`: Camera exposure time in microseconds during night mode
+  * `gain`: Camera gain (ISO equivalent) during night mode
 * `export`: Image export settings
-
   * `base_dir`: Directory to save frames
-  * `formats`: List of formats ['jpg', 'png', 'npy']
-  * `save_before_s`, `save_after_s`: Seconds of frames to save before/after trigger
-  * `stack_dark_frames`: Whether to stack multiple frames for low-light enhancement
+  * `formats`: List of formats to save ['jpg', 'png', 'npy']
+  * `save_before_s`, `save_after_s`: Seconds of frames to save before and after a trigger
+  * `stack_dark_frames`: Whether to stack multiple frames to improve low-light images
   * `stack_count`: Number of frames to stack
-* `network`: Trigger server port
-* `logging`: Logging level
+  * `auto_save_interval_s`: Interval in seconds for automatic hourly (or custom) saves
+* `network`: Trigger server configuration
+  * `trigger_port`: TCP port for external triggers
+* `logging`: Logging settings
+  * `level`: Logging verbosity (e.g., 'INFO', 'DEBUG')
+
+Adjusting these values lets you control camera behavior, night mode logic, image saving preferences, and integration with external triggers without modifying Python code. This allows flexible adaptation to lighting conditions, storage requirements, and automated workflows.
 
 ## Usage
 
-1. Start the main service:
-
-   ```bash
-   python3 main.py
-   ```
-2. The service continuously captures frames into the ring buffer.
-3. Night mode automatically triggers based on brightness.
-4. External systems can send network triggers to save recent frames.
-
-## Triggering Image Capture
-
-Send a string command to the trigger port (default 9999) via TCP. This will save the last N seconds of frames according to the `export` configuration.
-
-Example using `nc` (netcat):
+1. Start the service:
+```bash
+python3 main.py
+```
+2. Continuous capture to ring buffer.
+3. Night mode auto-triggers.
+4. External triggers (`echo "COMMAND" | nc <pi_ip> 9999`):
 
 ```bash
-echo "night_level" | nc <pi_ip> 9999
-
-echo "night_level" | nc raspberrypi 9999
-echo "save png" | nc raspberrypi 9999
 echo "save jpg" | nc raspberrypi 9999
+echo "save png" | nc raspberrypi 9999
+echo "night_level" | nc raspberrypi 9999  # Query night status
 ```
+
+## Night Mode and Stacking
+
+The night mode automatically adjusts the camera behavior when lighting conditions are low. Compared to normal daytime operation, night mode can:
+
+* Increase exposure time (`exposure_us`) and sensor gain (`gain`) to capture brighter images in dark conditions.
+* Switch the camera mode to `'still'` or `'slow_video'` to allow longer exposures without dropping frames.
+* Trigger only after a configurable number of consecutive dark frames (`min_dark_frames`) to avoid false positives during brief shadows or flickers.
+
+The `stack_dark_frames` option in the exporter further enhances low-light images. When enabled, it combines (`stacks`) multiple consecutive frames into a single image, averaging pixel values. This reduces noise and improves visibility while preserving details, similar to long-exposure photography, without increasing the actual exposure time of each frame.
 
 ## Notes
 
-* The ring buffer keeps the most recent frames for on-demand saving.
-* The night mode controller only triggers when consecutive frames are below the dark threshold.
-* Exporter supports stacking frames to improve image brightness for low-light captures.
-* Images are timestamped and numbered to maintain order.
-* This project is optimized for Python 3.11 features like type hints, `match/case`, and `dataclasses(kw_only=True)`.
+* Ring buffer stores recent frames.
+* Stacking improves low-light images.
+* Hourly auto-save saves last captured frame automatically.
+* Images timestamped and numbered.
+* Optimized for Python 3.11 features: type hints, match/case, dataclasses(kw_only=True).
 
+## Update python program
+
+   ```bash
+   scp pi_cam_service_py311/* dan@raspberrypi://home/dan/pi_cam_service
+   ```
+
+## get image folder
+
+   ```bash
+   scp -rp dan@raspberrypi://home/dan/pi_cam_service/captures .
+
+   rsync -avz --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
+
+   ```
