@@ -9,28 +9,44 @@ class CameraController:
         self.ring = ring
         self.cam = Picamera2()
         self.frame_id = 0
-        self.night = False
+        self.mode = None  # "video" | "still"
 
     def start_video(self) -> None:
+        if self.mode == "video":
+            return
+        self.cam.stop()
         cfg = self.cam.create_video_configuration(
             main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
             controls={"FrameRate": self.cfg["framerate"]}
         )
         self.cam.configure(cfg)
         self.cam.start()
+        self.mode = "video"
 
-    def stop(self) -> None:
+    def start_still(self, night_cfg: dict) -> None:
+        if self.mode == "still":
+            return
         self.cam.stop()
-
-    def capture_loop(self) -> None:
-        while True:
-            self.capture_once()
+        cfg = self.cam.create_still_configuration(
+            main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
+            controls={
+                "ExposureTime": night_cfg["exposure_us"],
+                "AnalogueGain": night_cfg["gain"]
+            }
+        )
+        self.cam.configure(cfg)
+        self.cam.start()
+        self.mode = "still"
 
     def capture_once(self) -> None:
-        """Capture a single frame and append to ring buffer."""
-        img: np.ndarray = self.cam.capture_array()
+        img = self.cam.capture_array()
         ts = time.time()
-        score: float = float(np.mean(img))
-        meta = FrameMetadata(frame_id=self.frame_id, timestamp=ts, dark_score=score, night_mode=self.night)
+        score = float(img.mean())
+        meta = FrameMetadata(
+            frame_id=self.frame_id,
+            timestamp=ts,
+            dark_score=score,
+            night_mode=self.mode == "still"
+        )
         self.ring.append((img, meta))
         self.frame_id += 1
