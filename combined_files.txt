@@ -201,7 +201,7 @@ desc = cam.describe_mode()
 log_mode_change(prev_desc, desc)
 prev_desc = desc
 
-CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 2.0)
+CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 4.0)
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 last_auto_save = 0.0
 
@@ -253,32 +253,31 @@ logging.info("Trigger server started")
 logging.info("Starting main capture loop")
 while True:
     try:
-        future = executor.submit(cam.capture_once)
-        future.result(timeout=CAPTURE_TIMEOUT)
+        start = time.time()
+        cam.capture_once()
+        duration = time.time() - start
+        if duration > CAPTURE_TIMEOUT:
+            logging.warning("Camera capture slow (%.1fs > %.1fs)", duration, CAPTURE_TIMEOUT)
 
         event = None
         if ring.buffer:
             img, meta = ring.buffer[-1]
+            # Always evaluate brightness, regardless of camera mode
             event = night_ctrl.update(meta.dark_score)
 
-        if event == "ENTER" and cfg["night"]["enable"] and cam.mode != "still":
-            if cfg["night"]["mode"] == "still":
+            if event == "ENTER" and cfg["night"]["enable"] and cam.mode != "still":
                 logging.info("Night detected")
                 before = cam.describe_mode()
                 cam.start_still(cfg["night"])
                 after = cam.describe_mode()
                 log_mode_change(before, after)
 
-        elif event == "EXIT" and cam.mode != "video":
-            logging.info("Day detected")
-            before = cam.describe_mode()
-            cam.start_video()
-            after = cam.describe_mode()
-            log_mode_change(before, after)
-
-    except concurrent.futures.TimeoutError:
-        logging.warning("Camera capture timed out at %s, skipping frame", time.strftime("%H:%M:%S"))
-        continue
+            elif event == "EXIT" and cam.mode != "video":
+                logging.info("Day detected")
+                before = cam.describe_mode()
+                cam.start_video()
+                after = cam.describe_mode()
+                log_mode_change(before, after)
 
     except Exception as e:
         logging.error(f"Camera error: {e}")
