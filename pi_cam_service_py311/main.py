@@ -156,7 +156,7 @@ while True:
                 exporter.save([(img, meta)])
                 del img
             else:
-                # save image from ring
+                # save image from ring // may require to move the  exept below aboveAuto-save logic 
                 frames = ring.get_last(1)
                 if frames:
                     try:
