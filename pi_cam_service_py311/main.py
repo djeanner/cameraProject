@@ -117,7 +117,7 @@ while True:
             log_mode_change(before, after)
 
     except concurrent.futures.TimeoutError:
-        logging.warning("Camera capture timed out, skipping frame")
+        logging.warning("Camera capture timed out at %s, skipping frame", time.strftime("%H:%M:%S"))
         continue
 
     except Exception as e:

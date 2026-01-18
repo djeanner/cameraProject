@@ -1,4 +1,4 @@
-===== pi_cam_service_py311/config.json =====
+-e ===== pi_cam_service_py311/config.json =====
 
 {
   "camera": {
@@ -38,7 +38,7 @@
   "logging": {
     "level": "INFO"
   }
-}===== pi_cam_service_py311/camera_controller.py =====
+}-e ===== pi_cam_service_py311/camera_controller.py =====
 
 import time, numpy as np
 from picamera2 import Picamera2
@@ -51,32 +51,69 @@ class CameraController:
         self.ring = ring
         self.cam = Picamera2()
         self.frame_id = 0
-        self.night = False
+        self.mode = None
+        self.night_cfg = None
 
     def start_video(self) -> None:
+        if self.mode == "video":
+            return
+        self.cam.stop()
         cfg = self.cam.create_video_configuration(
             main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
             controls={"FrameRate": self.cfg["framerate"]}
         )
         self.cam.configure(cfg)
         self.cam.start()
+        self.mode = "video"
 
-    def stop(self) -> None:
+    def start_still(self, night_cfg: dict) -> None:
+        if self.mode == "still":
+            return
         self.cam.stop()
-
-    def capture_loop(self) -> None:
-        while True:
-            self.capture_once()
+        cfg = self.cam.create_still_configuration(
+            main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
+            controls={
+                "ExposureTime": night_cfg["exposure_us"],
+                "AnalogueGain": night_cfg["gain"]
+            }
+        )
+        self.cam.configure(cfg)
+        self.cam.start()
+        self.mode = "still"
+        self.night_cfg = night_cfg
 
     def capture_once(self) -> None:
-        """Capture a single frame and append to ring buffer."""
-        img: np.ndarray = self.cam.capture_array()
+        img = self.cam.capture_array()
         ts = time.time()
-        score: float = float(np.mean(img))
-        meta = FrameMetadata(frame_id=self.frame_id, timestamp=ts, dark_score=score, night_mode=self.night)
+        score = float(img.mean())
+        meta = FrameMetadata(
+            frame_id=self.frame_id,
+            timestamp=ts,
+            dark_score=score,
+            night_mode=self.mode == "still"
+        )
         self.ring.append((img, meta))
         self.frame_id += 1
-===== pi_cam_service_py311/exporter.py =====
+
+    def describe_mode(self) -> dict:
+        if self.mode == "video":
+            return {
+                "mode": "video",
+                "resolution": f'{self.cfg["width"]}x{self.cfg["height"]}',
+                "framerate": self.cfg["framerate"],
+                "exposure_us": "auto",
+                "gain": "auto"
+            }
+
+        if self.mode == "still":
+            return {
+                "mode": "still",
+                "resolution": f'{self.cfg["width"]}x{self.cfg["height"]}',
+                "framerate": None,
+                "exposure_us": self.night_cfg["exposure_us"],
+                "gain": self.night_cfg["gain"]
+            }
+-e ===== pi_cam_service_py311/exporter.py =====
 
 
 import os
@@ -119,7 +156,7 @@ class Exporter:
         stacked = sum(imgs) / len(imgs)
         stacked = stacked.clip(0, 255).astype("uint8")
         return self.save([(stacked, frames[-1][1])], formats)
-===== pi_cam_service_py311/main.py =====
+-e ===== pi_cam_service_py311/main.py =====
 
 import json
 import logging
@@ -130,24 +167,45 @@ from ring_buffer import RingBuffer
 from camera_controller import CameraController
 from exporter import Exporter
 from trigger_server import TriggerServer
+from night_mode import NightModeController
 
-# Load configuration
+# Configuration
+
 with open("config.json") as f:
     cfg: dict = json.load(f)
 
 logging.basicConfig(level=cfg["logging"]["level"])
 
 # Initialize components
+
 ring = RingBuffer(cfg["ring"]["size"])
 exporter = Exporter(cfg["export"])
 cam = CameraController(cfg["camera"], ring)
+night_ctrl = NightModeController(cfg["night"])
+
+def log_mode_change(old: dict | None, new: dict) -> None:
+    logging.info("Camera configuration updated:")
+    if old is None:
+        for k, v in new.items():
+            logging.info(f"  {k}: {v}")
+        return
+
+    for k in new:
+        if old.get(k) != new.get(k):
+            logging.info(f"  {k}: {old.get(k)} → {new.get(k)}")
+            
+# Start in day mode (as per config)
+prev_desc = cam.describe_mode()
 cam.start_video()
+desc = cam.describe_mode()
+log_mode_change(prev_desc, desc)
+prev_desc = desc
 
-# Auto-save tracking
-last_auto_save = 0.0
-CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 2.0)  # default 2s timeout
+CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 2.0)
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+last_auto_save = 0.0
 
+# Trigger handler
 
 def on_trigger(cmd: str) -> str:
     cmd = cmd.strip()
@@ -155,28 +213,39 @@ def on_trigger(cmd: str) -> str:
     if cmd.startswith("save"):
         parts = cmd.split()
         formats = parts[1:] if len(parts) > 1 else None
-        frames = ring.get_last_seconds(cfg["export"]["save_before_s"], cfg["camera"]["framerate"])
+
+        frames = ring.get_last_seconds(
+            cfg["export"]["save_before_s"],
+            cfg["camera"]["framerate"]
+        )
+
         if not frames:
             return "NO_FRAMES"
+
         if cfg["export"]["stack_dark_frames"]:
             used = frames[-cfg["export"]["stack_count"]:]
-            saved = exporter.stack_and_save(used) if formats is None else exporter.save([(used[-1][0], used[-1][1])], formats)
+            saved = exporter.stack_and_save(used, formats)
         else:
             saved = exporter.save(frames, formats)
+
         return "SAVED:" + ",".join(saved) if saved else "NOT_SAVED"
 
     if cmd == "night_level":
         if not ring.buffer:
             return "NO_DATA"
+
         meta = ring.buffer[-1][1]
-        thr = cfg["night"]["dark_threshold"]
-        status = "NIGHT" if meta.dark_score < thr else "DAY"
-        return f"LEVEL={meta.dark_score:.1f} THRESH={thr} STATUS={status}"
+        status = "NIGHT" if night_ctrl.active else "DAY"
+        return (
+            f"LEVEL={meta.dark_score:.1f} "
+            f"THRESH={cfg['night']['dark_threshold']} "
+            f"STATUS={status}"
+        )
 
     return "UNKNOWN_COMMAND"
 
+# Start trigger server
 
-# Start the trigger server
 TriggerServer(cfg["network"]["trigger_port"], on_trigger).start()
 logging.info("Trigger server started")
 
@@ -184,30 +253,57 @@ logging.info("Trigger server started")
 logging.info("Starting main capture loop")
 while True:
     try:
-        # Run capture in a separate thread with timeout
         future = executor.submit(cam.capture_once)
         future.result(timeout=CAPTURE_TIMEOUT)
+
+        event = None
+        if ring.buffer:
+            img, meta = ring.buffer[-1]
+            event = night_ctrl.update(meta.dark_score)
+
+        if event == "ENTER" and cfg["night"]["enable"] and cam.mode != "still":
+            if cfg["night"]["mode"] == "still":
+                logging.info("Night detected")
+                before = cam.describe_mode()
+                cam.start_still(cfg["night"])
+                after = cam.describe_mode()
+                log_mode_change(before, after)
+
+        elif event == "EXIT" and cam.mode != "video":
+            logging.info("Day detected")
+            before = cam.describe_mode()
+            cam.start_video()
+            after = cam.describe_mode()
+            log_mode_change(before, after)
+
     except concurrent.futures.TimeoutError:
-        logging.warning("Camera capture timed out! Skipping this frame.")
+        logging.warning("Camera capture timed out at %s, skipping frame", time.strftime("%H:%M:%S"))
         continue
+
     except Exception as e:
-        logging.error(f"Camera capture failed: {e}")
+        logging.error(f"Camera error: {e}")
         time.sleep(1)
         continue
 
     # Auto-save logic
+
     now = time.time()
     interval = cfg["export"].get("auto_save_interval_s", 0)
+
     if interval > 0 and now - last_auto_save >= interval:
         frames = ring.get_last(1)
         if frames:
             try:
                 saved = exporter.save(frames)
-                logging.info(f"Hourly auto-save: {saved}")
+                logging.info(f"Auto-save: {saved}")
             except Exception as e:
                 logging.error(f"Auto-save failed: {e}")
         last_auto_save = now
-===== pi_cam_service_py311/metadata.py =====
+
+    # Slow down capture in still mode
+    if cam.mode == "still":
+        time.sleep(2.0)
+-e ===== pi_cam_service_py311/metadata.py =====
 
 
 from dataclasses import dataclass
@@ -218,7 +314,7 @@ class FrameMetadata:
     timestamp: float
     dark_score: float
     night_mode: bool
-===== pi_cam_service_py311/night_mode.py =====
+-e ===== pi_cam_service_py311/night_mode.py =====
 
 
 class NightModeController:
@@ -242,7 +338,7 @@ class NightModeController:
                 return "EXIT"
             case _:
                 return None
-===== pi_cam_service_py311/ring_buffer.py =====
+-e ===== pi_cam_service_py311/ring_buffer.py =====
 
 
 from collections import deque
@@ -266,7 +362,7 @@ class RingBuffer:
 
     def get_last_seconds(self, seconds: int, fps: int) -> List[Tuple[np.ndarray, FrameMetadata]]:
         return self.get_last(int(seconds * fps))
-===== pi_cam_service_py311/trigger_server.py =====
+-e ===== pi_cam_service_py311/trigger_server.py =====
 
 import socket
 import threading
