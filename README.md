@@ -48,6 +48,10 @@ The `config.json` file centralizes all configurable aspects of the Pi Cam Servic
   * `video_mode`: 'stream' for continuous video, 'still' for single image captures
 * `ring`: Ring buffer configuration
   * `size`: Number of frames to store in memory
+  * `downscale`: Ring buffer configuration
+    * `enable`: default true
+    * `width`: default 256
+    * `height`: default 192
 * `night`: Night mode parameters
   * `enable`: Enable or disable night mode
   * `dark_threshold`: Frame dark score below which the system considers it night
@@ -103,6 +107,7 @@ The `stack_dark_frames` option in the exporter further enhances low-light images
 * Stacking improves low-light images.
 * Images timestamped and numbered.
 * Optimized for Python 3.11 features: type hints, match/case, dataclasses(kw_only=True).
+* Without downscale, 300 color images with 1024x768 take about 700 MB. on pi 1B+ there is only about 136 MB. Need reduction of factor 5 (TO BE IMPROVED)
 
 ## Night Mode and Stacking
 

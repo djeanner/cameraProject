@@ -1,7 +1,8 @@
-import time, numpy as np
+import time
+import numpy as np
+import cv2
 from picamera2 import Picamera2
 from metadata import FrameMetadata
-from typing import Tuple
 
 class CameraController:
     def __init__(self, cfg: dict, ring) -> None:
@@ -11,7 +12,11 @@ class CameraController:
         self.frame_id = 0
         self.mode = None
         self.night_cfg = None
-
+        self.downscale_cfg = self.cfg.get("downscale", {
+            "enable": True,
+            "width": 256,
+            "height": 192
+        })
     def start_video(self) -> None:
         if self.mode == "video":
             return
@@ -42,16 +47,32 @@ class CameraController:
 
     def capture_once(self) -> None:
         img = self.cam.capture_array()
+
+        # Optional downscale for ring buffer
+        if self.downscale_cfg.get("enable", True):
+            w = self.downscale_cfg["width"]
+            h = self.downscale_cfg["height"]
+            ring_img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+        else:
+            ring_img = img
+
         ts = time.time()
-        score = float(img.mean())
+        score = float(ring_img.mean())
+
         meta = FrameMetadata(
             frame_id=self.frame_id,
             timestamp=ts,
             dark_score=score,
-            night_mode=self.mode == "still"
+            night_mode=(self.mode == "still")
         )
-        self.ring.append((img, meta))
+
+        self.ring.append((ring_img, meta))
         self.frame_id += 1
+
+
+    def capture_fullres(self) -> np.ndarray:
+        """Capture a full-resolution frame for export"""
+        return self.cam.capture_array()
 
     def describe_mode(self) -> dict:
         if self.mode == "video":

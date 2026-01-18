@@ -7,7 +7,12 @@
     "video_mode": "stream"
   },
   "ring": {
-    "size": 300
+    "size": 300,
+    "downscale": {
+      "enable": true,
+      "width": 256,
+      "height": 192
+    }
   },
   "night": {
     "enable": true,
