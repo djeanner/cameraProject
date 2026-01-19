@@ -4,13 +4,70 @@ import time
 import concurrent.futures
 import psutil
 import gc
+import numpy as np
+
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from ring_buffer import RingBuffer
 from camera_controller import CameraController
 from exporter import Exporter
 from trigger_server import TriggerServer
 from night_mode import NightModeController
+    
+def adjust_ring_size(cfg: dict) -> int:
+    vm = psutil.virtual_memory()
 
+    usable_bytes = int(vm.available * 0.80)
+
+    # Determine ring image resolution
+    downscale_cfg = cfg["ring"].get("downscale", {})
+    if downscale_cfg.get("enable", False):
+        ring_width = downscale_cfg["width"]
+        ring_height = downscale_cfg["height"]
+        source = "downscaled ring images"
+    else:
+        ring_width = cfg["camera"]["width"]
+        ring_height = cfg["camera"]["height"]
+        source = "full-resolution camera images"
+
+    channels = 3  # RGB
+    dtype = np.uint8
+
+    bytes_per_pixel = np.dtype(dtype).itemsize * channels
+    bytes_per_image = ring_width * ring_height * bytes_per_pixel
+
+    max_images = max(1, usable_bytes // bytes_per_image)
+
+    requested = cfg["ring"]["size"]
+    effective = min(requested, max_images)
+
+    # Log adjustment ONLY if needed
+    if effective != requested:
+        logging.warning(
+            "Ring buffer size adjusted: requested=%d → effective=%d",
+            requested, effective
+        )
+
+    # Always log calculation details (expert traceability)
+    logging.info(
+        "Ring memory calculation details:\n"
+        "  Available RAM       : %.1f MiB\n"
+        "  Usable (80%%)        : %.1f MiB\n"
+        "  Image format         : RGB uint8\n"
+        "  Ring image size      : %dx%d\n"
+        "  Bytes per image      : %.1f KiB\n"
+        "  Max images possible  : %d\n",
+        vm.available / (1024 * 1024),
+        usable_bytes / (1024 * 1024),
+        ring_width,
+        ring_height,
+        bytes_per_image / 1024,
+        max_images
+    )
+
+    return effective
+    
 # Configuration
 
 with open("config.json") as f:
@@ -18,9 +75,11 @@ with open("config.json") as f:
 
 logging.basicConfig(level=cfg["logging"]["level"])
 
+
 # Initialize components
 
-ring = RingBuffer(cfg["ring"]["size"])
+effective_ring_size = adjust_ring_size(cfg)
+ring = RingBuffer(effective_ring_size)
 exporter = Exporter(cfg["export"])
 cam = CameraController(cfg["camera"], ring)
 night_ctrl = NightModeController(cfg["night"])
