@@ -19,7 +19,7 @@
   "night": {
     "enable": true,
     "dark_threshold": 35,
-    "bright_threshold": 55,
+    "bright_threshold": 155,
     "min_dark_frames": 20,
     "mode": "still",
     "exposure_us": 2000000,
@@ -446,9 +446,12 @@ def on_trigger(cmd: str, conn=None) -> str:
 
         meta = ring.buffer[-1][1]
         status = "NIGHT" if night_ctrl.active else "DAY"
+        relavantCriterion = cfg['night']['bright_threshold'] if night_ctrl.active else cfg['night']['dark_threshold']
         return (
             f"LEVEL={meta.dark_score:.1f} "
-            f"THRESH={cfg['night']['dark_threshold']} "
+            f"relevant threshold={relavantCriterion} "
+            f"dark_threshold: < {cfg['night']['dark_threshold']} "
+            f"bright_threshold: > {cfg['night']['bright_threshold']} "
             f"STATUS={status}"
         )
         

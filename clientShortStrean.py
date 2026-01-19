@@ -23,7 +23,7 @@ def recv_all(sock, n):
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
-    cmd = f"stream {MAX_FRAMES}\n"
+    cmd = f"shortstream {MAX_FRAMES}\n"
     s.sendall(cmd.encode())
 
     frame_idx = 0
