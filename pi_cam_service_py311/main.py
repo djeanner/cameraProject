@@ -273,7 +273,7 @@ def on_trigger(cmd: str, conn=None) -> str:
         return f"RSS={rss:.1f}MiB SWAP={swap:.1f}%"
     
     # Example for streaming
-    if cmd.startswith("stream"):
+    if cmd.startswith("shortstream"):
         if conn is None:
             return "ERROR_NO_CONNECTION"
 
@@ -309,10 +309,15 @@ def on_trigger(cmd: str, conn=None) -> str:
 
     return "UNKNOWN_COMMAND"
 
+
 # Start trigger server
 
 TriggerServer(cfg["network"]["trigger_port"], on_trigger).start()
 logging.info("Trigger server started")
+
+from mjpeg_server import MJPEGServer
+MJPEGServer(8080, ring, fps=2).start()
+logging.info("mjpeg server started on port 8080")
 
 # Main loop with timeout handling
 logging.info("Starting main capture loop")

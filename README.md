@@ -1,10 +1,16 @@
 # cameraProject
 
-Python project for camera control written with assitance of AI. It is specifically designed for system with little RAM. The ring can be parametrized to reduce image size (allowing one to save more frames). It has two different mode for night (based on still images) and day (based on camera stream). It accepts commands using line-based TCP protocol (netcat) to save images, test health of the system and get info about the brightness relevant for day/night status.
+Python camera control for low-RAM systems with ring buffer, day/night detection, night-frame stacking, and MJPEG streaming with metadata suitable for image or object analysis.
+
+Python project for camera control written with assistance of AI. It is specifically designed for systems with little RAM. The ring buffer can be parametrized to reduce image size (allowing one to store more frames). It has two separate criteria for night and day detection based on brightness. Commands are accepted via a line-based TCP protocol (netcat) to save images, test system health, or query brightness for day/night status. The camera also supports MJPEG streaming including per-frame metadata, making the stream usable for object detection or other image analysis pipelines.
+
+---
 
 ## Overview
 
-Python 3.11-based Pi camera service for continuous video streaming, night mode, ring buffer, flexible image export, and hourly auto-save.
+Python 3.11-based Pi camera service for continuous video streaming, night mode, ring buffer, flexible image export, stacked low-light frames, and hourly auto-save.
+
+---
 
 ## Project Structure
 
@@ -12,33 +18,43 @@ Python 3.11-based Pi camera service for continuous video streaming, night mode, 
 |------------------------|---------|
 | `config.json`          | Camera, ring buffer, night mode, export, network trigger, logging configuration |
 | `ring_buffer.py`       | Thread-safe ring buffer with metadata |
-| `metadata.py`          | FrameMetadata dataclass |
+| `metadata.py`          | `FrameMetadata` dataclass |
 | `night_mode.py`        | Night mode controller based on brightness |
 | `exporter.py`          | Save frames, optionally stack dark frames |
 | `trigger_server.py`    | Network trigger server |
 | `camera_controller.py` | PiCamera2 control, feeds ring buffer |
 | `main.py`              | Orchestrates camera, night mode, ring buffer, exporter, triggers, and hourly auto-save |
+| `stream_server.py`     | MJPEG server with frame metadata headers |
 | `requirements.txt`     | `picamera2`, `numpy`, `opencv-python` |
+
+---
 
 ## Installation
 
-1. Clone or download the project.
-2. Install Python 3.11 if not already installed.
-3. Create a virtual environment (optional but recommended except on weak system):
+1. Clone or download the project.  
+2. Install Python 3.11 if not already installed.  
+3. (Optional) Create a virtual environment:
 
    ```bash
    python3 -m venv venv
    source venv/bin/activate
    ```
 4. Install dependencies:
-
    ```bash
-   pip install -r requirements.txt
+    pip install -r requirements.txt
    ```
 
-## Configuration (`config.json`)
+## Configuration (config.json)
 
-The `config.json` file centralizes all configurable aspects of the Pi Cam Service. It includes:
+Central configuration for the Pi Cam Service:
+* camera: width, height, framerate, codec, video_mode
+* ring: size of ring buffer, optional downscale
+* night: night mode enable, dark/bright thresholds, min dark frames, mode (still or slow_video), exposure/gain
+* export: base_dir, formats, pre/post-trigger save seconds, stack_dark_frames, stack_count, auto_save_interval_s
+* network: trigger TCP port
+* logging: verbosity level
+
+## Details of configuration (config.json)
 
 * `camera`: Camera parameters
   * `width`, `height`: Resolution in pixels
@@ -69,74 +85,73 @@ The `config.json` file centralizes all configurable aspects of the Pi Cam Servic
   * `trigger_port`: TCP port for external triggers
 * `logging`: Logging settings
   * `level`: Logging verbosity (e.g., 'INFO', 'DEBUG')
-
-Adjusting these values lets you control camera behavior, night mode logic, image saving preferences, and integration with external triggers without modifying Python code. This allows flexible adaptation to lighting conditions, storage requirements, and automated workflows.
-
+  Adjusting these allows full control of camera, night mode logic, image saving, and external triggers.
 ## Usage
 
-1. Start the service:
+### Start the service
 ```bash
 cd pi_cam_service
 python3 main.py
 ```
-2. Continuous capture to ring buffer.
-3. Night mode auto-triggers.
-4. External triggers (`echo "COMMAND" | nc <pi_ip> 9999`):
+
+### External triggers (via netcat)
 
 ```bash
-echo "save jpg" | nc raspberrypi 9999      # Capture a full-res frame
-echo "pastStack jpg" | nc raspberrypi 9999 # Capture a stacked image from ring buffer
-echo "night_level" | nc raspberrypi 9999  # Query night status
+echo "save jpg" | nc raspberrypi 9999       # Capture a full-res frame
+echo "pastStack jpg" | nc raspberrypi 9999  # Capture a stacked image from ring buffer
+echo "night_level" | nc raspberrypi 9999    # Query night status
+echo "health" | nc raspberrypi 9999         # Check system health
 ```
 
+### Streaming
+
+   On the client side MJPEG stream with metadata (frame ID, timestamp, dark score, night mode):
+```bash
+python3 client.py           # Continuous MJPEG client prints metadata per frame (port 10000)
+python3 clientShortStream.py # Short-term stream saving frames to folder (blocks other triggers uses port 9999)
+```
+    VLC or a browser can connect directly to MJPEG (`http://raspberrypi:8080/stream`) and display live video. Switching between VLC and Python client works safely.
+
+### Stream Port and Client Switching
+
+The MJPEG stream runs on **port 8080**. Only one client can actively receive the stream at a time. If you are using VLC to visualize the stream, the Python MJPEG client (`client.py`) will not receive frames simultaneously. To switch:
+
+1. Stop VLC before starting `client.py` to avoid connection refusal or stalls.
+2. Start `client.py` to read the stream and print metadata per frame.
+3. You can safely stop the Python client and restart VLC to resume visualization.  
+
+This ensures smooth operation without losing triggers or metadata, while keeping the stream accessible for either analysis (Python client) or display (VLC).
+
 ## Night Mode and Stacking
+* Night mode adjusts camera for low-light: increases exposure and gain, switches mode (still or slow_video).
+* Only triggers after min_dark_frames consecutive dark frames to prevent flicker-induced false positives.
+* stack_dark_frames combines multiple dark frames into a single averaged image, reducing noise similar to long-exposure photography.
+* Metadata per frame (X-Frame-Id, X-Timestamp, X-Dark-Score, X-Night) is available in MJPEG stream for analysis or automated workflows.
 
-The night mode automatically adjusts the camera behavior when lighting conditions are low. Compared to normal daytime operation, night mode can:
-
-* Increase exposure time (`exposure_us`) and sensor gain (`gain`) to capture brighter images in dark conditions.
-* Switch the camera mode to `'still'` or `'slow_video'` to allow longer exposures without dropping frames.
-* Trigger only after a configurable number of consecutive dark frames (`min_dark_frames`) to avoid false positives during brief shadows or flickers.
-
-The `stack_dark_frames` option in the exporter further enhances low-light images. When enabled, it combines (`stacks`) multiple consecutive frames into a single image, averaging pixel values. This reduces noise and improves visibility while preserving details, similar to long-exposure photography, without increasing the actual exposure time of each frame.
+## Auto-Save Behavior
+* auto_save_interval_s periodically saves frames.
+* Day mode: normal video frame.
+* Night mode: long-exposure or stacked still frames.
 
 ## Notes
 
-* Ring buffer stores recent frames.
-* Stacking improves low-light images.
-* Images timestamped and numbered.
+* Ring buffer stores recent frames efficiently.
+* Stacking improves low-light image quality.
+* Images are timestamped and numbered.
 * Optimized for Python 3.11 features: type hints, match/case, dataclasses(kw_only=True).
-* Without downscale, 300 color images with 1024x768 take about 700 MB. on pi 1B+ there is only about 136 MB. Need reduction of factor 5 (TO BE IMPROVED)
+* Full-res 1024×768 color images can require ~700MB RAM; downscale recommended on Pi 1B+ (~136MB available).
 
-## Night Mode and Stacking
+## Updating Python program
+```bash
+scp pi_cam_service_py311/* dan@raspberrypi://home/dan/pi_cam_service
+```
 
-The night mode automatically adjusts the camera behavior when lighting conditions are low. Compared to normal daytime operation, night mode can:
+## Retrieving Images
+```bash
+scp -rp dan@raspberrypi://home/dan/pi_cam_service/captures .
+rsync -av --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
+# Limit bandwidth (KB/s)
+rsync -av --bwlimit=500 --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
+```
 
-* Increase exposure time (`exposure_us`) and sensor gain (`gain`) to capture brighter images in dark conditions.
-* Switch the camera mode to `'still'` or `'slow_video'` depending on configuration, allowing longer exposures without dropping frames.
-* When switching modes, the service logs exactly which camera parameters changed (mode, framerate, exposure, gain), helping with monitoring and debugging.
-* Trigger only after a configurable number of consecutive dark frames (`min_dark_frames`) to avoid false positives during brief shadows or flickers.
-
-The `stack_dark_frames` option in the exporter further enhances low-light images. When enabled, it combines (`stacks`) multiple consecutive frames into a single image, averaging pixel values. This reduces noise and improves visibility while preserving details, similar to long-exposure photography, without increasing the actual exposure time of each frame.
-
-### Auto-Save Behavior
-
-* The automatic save interval (`auto_save_interval_s`) periodically saves the most recent frame.
-  - If the camera is in day mode, a normal video frame is saved.
-  - If the camera is in night mode, the save captures the long-exposure still frame.
-
-
-## Update python program
-
-   ```bash
-   scp pi_cam_service_py311/* dan@raspberrypi://home/dan/pi_cam_service
-   ```
-
-## get image folder
-
-   ```bash
-   scp -rp dan@raspberrypi://home/dan/pi_cam_service/captures .
-
-   rsync -av --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
-   echo "limit bandwidth in KB/s"
-   rsync -av --bwlimit=500 --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
-   ```
+This version reflects metadata streaming, night/day dual thresholds, and frame stacking, while keeping your original ring buffer, triggers, and low-RAM optimization.
