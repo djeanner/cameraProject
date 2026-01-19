@@ -1,7 +1,6 @@
 # cameraProject
 
-Python project for camera control.
-
+Python project for camera control written with assitance of AI. It is specifically designed for system with little RAM. The ring can be parametrized to reduce image size (allowing one to save more frames). It has two different mode for night (based on still images) and day (based on camera stream). It accepts commands using line-based TCP protocol (netcat) to save images, test health of the system and get info about the brightness relevant for day/night status.
 
 ## Overview
 
