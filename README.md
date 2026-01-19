@@ -1,6 +1,6 @@
 # cameraProject
 
-Python camera control for low-RAM systems with ring buffer, day/night detection, night-frame stacking, and MJPEG streaming with metadata suitable for image or object analysis.
+Python camera control for low-RAM systems featuring ring buffer, day/night detection, night-frame stacking, and MJPEG streaming with metadata suitable for image or object analysis.
 
 Python project for camera control written with assistance of AI. It is specifically designed for systems with little RAM. The ring buffer can be parametrized to reduce image size (allowing one to store more frames). It has two separate criteria for night and day detection based on brightness. Commands are accepted via a line-based TCP protocol (netcat) to save images, test system health, or query brightness for day/night status. The camera also supports MJPEG streaming including per-frame metadata, making the stream usable for object detection or other image analysis pipelines.
 
@@ -44,9 +44,9 @@ Python 3.11-based Pi camera service for continuous video streaming, night mode, 
     pip install -r requirements.txt
    ```
 
-## Configuration (config.json)
+## Configuration
 
-Central configuration for the Pi Cam Service:
+[config.json](pi_cam_service_py311/config.json) includes the configuration for the Pi Cam Service:
 * camera: width, height, framerate, codec, video_mode
 * ring: size of ring buffer, optional downscale
 * night: night mode enable, dark/bright thresholds, min dark frames, mode (still or slow_video), exposure/gain
@@ -54,38 +54,8 @@ Central configuration for the Pi Cam Service:
 * network: trigger TCP port
 * logging: verbosity level
 
-## Details of configuration (config.json)
+[more details](details.md)
 
-* `camera`: Camera parameters
-  * `width`, `height`: Resolution in pixels
-  * `framerate`: Capture frames per second
-  * `codec`: 'rgb' (or 'h264', if supported)
-  * `video_mode`: 'stream' for continuous video, 'still' for single image captures
-* `ring`: Requested number of frames (effective size auto-adjusted based on available RAM, image resolution, and format)
-  * `size`: Number of frames to store in memory
-  * `downscale`: Optional reduction of image resolution for ring buffer
-    * `enable`: true/false — if false, full-res frames are stored
-    * `width`,`height`: dimensions for downscaled frames
-* `night`: Night mode parameters
-  * `enable`: Enable or disable night mode
-  * `dark_threshold`: Frame dark score below which the system considers it night
-  * `bright_threshold`: Frame brightness above which the system exits night mode
-  * `min_dark_frames`: Number of consecutive dark frames needed to enter night mode
-  * `mode`: 'still' or 'slow_video', defining camera behavior in night mode
-  * `exposure_us`: Camera exposure time in microseconds during night mode
-  * `gain`: Camera gain (ISO equivalent) during night mode
-* `export`: Image export settings
-  * `base_dir`: Directory to save frames
-  * `formats`: List of formats to save ['jpg', 'png', 'npy']
-  * `save_before_s`: Seconds of frames to save before and after a trigger
-  * `stack_dark_frames`: Whether to stack multiple frames to improve low-light images
-  * `stack_count`: Number of frames to stack
-  * `auto_save_interval_s`: Interval in seconds for automatic hourly (or custom) saves
-* `network`: Trigger server configuration
-  * `trigger_port`: TCP port for external triggers
-* `logging`: Logging settings
-  * `level`: Logging verbosity (e.g., 'INFO', 'DEBUG')
-  Adjusting these allows full control of camera, night mode logic, image saving, and external triggers.
 ## Usage
 
 ### Start the service
@@ -107,7 +77,7 @@ echo "health" | nc raspberrypi 9999         # Check system health
 
    On the client side MJPEG stream with metadata (frame ID, timestamp, dark score, night mode):
 ```bash
-python3 client.py           # Continuous MJPEG client prints metadata per frame (port 10000)
+python3 client.py            # Continuous MJPEG client prints metadata per frame (port 10000)
 python3 clientShortStream.py # Short-term stream saving frames to folder (blocks other triggers uses port 9999)
 ```
     VLC or a browser can connect directly to MJPEG (`http://raspberrypi:8080/stream`) and display live video. Switching between VLC and Python client works safely.
@@ -149,8 +119,6 @@ scp pi_cam_service_py311/* dan@raspberrypi://home/dan/pi_cam_service
 ## Retrieving Images
 ```bash
 scp -rp dan@raspberrypi://home/dan/pi_cam_service/captures .
-rsync -av --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
-# Limit bandwidth (KB/s)
 rsync -av --bwlimit=500 --progress dan@raspberrypi:/home/dan/pi_cam_service/captures/ ./captures/
 ```
 
