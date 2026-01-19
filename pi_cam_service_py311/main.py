@@ -8,6 +8,9 @@ from pathlib import Path
 
 import numpy as np
 import psutil
+import io
+import struct
+import cv2
 
 from camera_controller import CameraController
 from exporter import Exporter
@@ -184,7 +187,7 @@ log_mode_change(None, cam.describe_mode())
 
 # Trigger handler
 
-def on_trigger(cmd: str) -> str:
+def on_trigger(cmd: str, conn=None) -> str:
     cmd = cmd.strip()
 
     if cmd.startswith("save"):
@@ -199,6 +202,7 @@ def on_trigger(cmd: str) -> str:
 
         age_s = time.time() - meta.timestamp  # time since capture
 
+        msg = ""
         if saved_files:
             msg = f"Saved single full-resolution image: {saved_files[0]} (timestamp: {meta.timestamp:.3f}, age: {age_s:.2f}s)"
         else:
@@ -255,9 +259,12 @@ def on_trigger(cmd: str) -> str:
 
         meta = ring.buffer[-1][1]
         status = "NIGHT" if night_ctrl.active else "DAY"
+        relavantCriterion = cfg['night']['bright_threshold'] if night_ctrl.active else cfg['night']['dark_threshold']
         return (
             f"LEVEL={meta.dark_score:.1f} "
-            f"THRESH={cfg['night']['dark_threshold']} "
+            f"relevant threshold={relavantCriterion} "
+            f"dark_threshold: < {cfg['night']['dark_threshold']} "
+            f"bright_threshold: > {cfg['night']['bright_threshold']} "
             f"STATUS={status}"
         )
         
@@ -265,6 +272,41 @@ def on_trigger(cmd: str) -> str:
         rss, swap = log_memory("HEALTH ")
         return f"RSS={rss:.1f}MiB SWAP={swap:.1f}%"
     
+    # Example for streaming
+    if cmd.startswith("stream"):
+        if conn is None:
+            return "ERROR_NO_CONNECTION"
+
+        parts = cmd.split()
+        max_frames = int(parts[1]) if len(parts) > 1 else 10
+
+        frames_available = ring.get_last(max_frames)
+        frames_sent = 0
+
+        for img, meta in frames_available:
+            try:
+                success, encoded = cv2.imencode(".jpg", img)
+                if not success:
+                    continue
+                data = encoded.tobytes()
+                size = len(data)
+                conn.sendall(struct.pack(">I", size))
+                conn.sendall(data)
+                frames_sent += 1
+            except Exception as e:
+                logging.error("Error sending frame: %s", e)
+
+        # End-of-stream marker
+        try:
+            conn.sendall(struct.pack(">I", 0))
+        except:
+            pass
+
+        skipped = len(frames_available) - frames_sent
+        msg = f"STREAM_DONE: sent={frames_sent}, skipped={skipped}, available={len(frames_available)}"
+        logging.info(msg)
+        return msg
+
     return "UNKNOWN_COMMAND"
 
 # Start trigger server
@@ -304,14 +346,14 @@ while True:
             event = night_ctrl.update(meta.dark_score)
 
             if event == "ENTER" and cam.mode != "still":
-                logging.info("Night detected")
+                logging.info("Night detected *************************************")
                 before = cam.describe_mode()
                 cam.start_still(cfg["night"])
                 after = cam.describe_mode()
                 log_mode_change(before, after)
 
             elif event == "EXIT" and cam.mode != "video":
-                logging.info("Day detected")
+                logging.info("Day detected *************************************")
                 before = cam.describe_mode()
                 cam.start_video()
                 after = cam.describe_mode()

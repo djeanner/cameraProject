@@ -17,7 +17,7 @@
   "night": {
     "enable": true,
     "dark_threshold": 35,
-    "bright_threshold": 55,
+    "bright_threshold": 155,
     "min_dark_frames": 20,
     "mode": "still",
     "exposure_us": 2000000,

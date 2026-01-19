@@ -2,3 +2,4 @@
 *.DS_Store
 captures/
 captures_del/
+received_frames/

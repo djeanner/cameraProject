@@ -3,7 +3,7 @@ import threading
 from typing import Callable
 
 class TriggerServer(threading.Thread):
-    def __init__(self, port: int, callback: Callable[[str], str]) -> None:
+    def __init__(self, port: int, callback: Callable[[str, "socket.socket"], str]) -> None:
         super().__init__(daemon=True)
         self.port = port
         self.callback = callback
@@ -14,8 +14,11 @@ class TriggerServer(threading.Thread):
         s.listen(5)
         while True:
             conn, _ = s.accept()
-            cmd = conn.recv(1024).decode().strip()
-            response = self.callback(cmd)
-            # Proper newline handling
-            conn.sendall((response + "\n").encode())
-            conn.close()
+            try:
+                cmd = conn.recv(1024).decode().strip()
+                response = self.callback(cmd, conn)
+                # Only send textual response if not already streaming
+                if not cmd.startswith("stream"):
+                    conn.sendall((response + "\n").encode())
+            finally:
+                conn.close()
