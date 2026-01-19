@@ -14,7 +14,39 @@ from exporter import Exporter
 from night_mode import NightModeController
 from ring_buffer import RingBuffer
 from trigger_server import TriggerServer
+from metadata import FrameMetadata
 
+def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, FrameMetadata]]:
+    """
+    Récupère les images à sauvegarder pour la commande 'save'.
+    
+    - Le point central correspond à 'save_before_s' secondes avant le trigger.
+    - Si stack_dark_frames est activé, on empile 'stack_count' images autour.
+    """
+    fps = cfg["camera"]["framerate"]
+    save_before_s = cfg["export"]["save_before_s"]
+    stack_count = cfg["export"]["stack_count"]
+
+    # nombre total d'images à récupérer de la fenêtre complète
+    total_frames = int(save_before_s * fps)
+    frames = ring.get_last(total_frames)
+
+    if not frames:
+        return []
+
+    if not cfg["export"]["stack_dark_frames"]:
+        # pas d'empilement, on renvoie toute la fenêtre
+        return frames
+
+    # index approximatif du point central à -save_before_s secondes
+    center_idx = max(0, len(frames) - int(fps * save_before_s))
+
+    # indices autour du centre pour empilement
+    half_stack = stack_count // 2
+    start_idx = max(0, center_idx - half_stack)
+    end_idx = min(len(frames), start_idx + stack_count)
+
+    return frames[start_idx:end_idx]
 
 def setup_logging(cfg: dict) -> None:
     log_level = getattr(logging, cfg["logging"]["level"].upper(), logging.INFO)
@@ -156,21 +188,63 @@ def on_trigger(cmd: str) -> str:
         parts = cmd.split()
         formats = parts[1:] if len(parts) > 1 else None
 
-        frames = ring.get_last_seconds(
-            cfg["export"]["save_before_s"],
-            cfg["camera"]["framerate"]
-        )
+        # Capture full-resolution image directly
+        img = cam.capture_fullres()
+        meta = ring.get_last(1)[0][1]
+        saved_files = exporter.save([(img, meta)], formats)
+        del img
 
-        if not frames:
-            return "NO_FRAMES"
+        age_s = time.time() - meta.timestamp  # time since capture
 
-        if cfg["export"]["stack_dark_frames"]:
-            used = frames[-cfg["export"]["stack_count"]:]
-            saved = exporter.stack_and_save(used, formats)
+        if saved_files:
+            msg = f"Saved single full-resolution image: {saved_files[0]} (timestamp: {meta.timestamp:.3f}, age: {age_s:.2f}s)"
         else:
-            saved = exporter.save(frames, formats)
+            msg = "NOT_SAVED"
 
-        return "SAVED:" + ",".join(saved) if saved else "NOT_SAVED"
+        logging.info(msg)
+        return msg
+
+    if cmd.startswith("pastStack"):
+        parts = cmd.split()
+        formats = parts[1:] if len(parts) > 1 else None
+
+        frames_to_save = get_frames_for_save(ring, cfg)
+        if not frames_to_save:
+            msg = "NO_FRAMES"
+            logging.info(msg)
+            return msg
+
+        now = time.time()
+        first_frame = frames_to_save[0][1]
+        last_frame = frames_to_save[-1][1]
+        age_first = now - first_frame.timestamp
+        age_last = now - last_frame.timestamp
+
+        # Determine whether stacking is applied
+        if cfg["export"]["stack_dark_frames"]:
+            saved_files = exporter.stack_and_save(frames_to_save, formats)
+            if saved_files:
+                msg = (
+                    f"Saved stacked image: {saved_files[0]} | stack of {len(frames_to_save)} frames | "
+                    f"first frame timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s) | "
+                    f"last frame timestamp: {last_frame.timestamp:.3f} (age: {age_last:.2f}s)"
+                    f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
+                )
+            else:
+                msg = "NOT_SAVED"
+        else:
+            saved_files = exporter.save(frames_to_save, formats)
+            if saved_files:
+                msg = (
+                    f"Saved {len(saved_files)} separate images from ring buffer, "
+                    f"starting at timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s)"
+                    f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
+                )
+            else:
+                msg = "NOT_SAVED"
+
+        logging.info(msg)
+        return msg
 
     if cmd == "night_level":
         if not ring.buffer:
@@ -245,8 +319,8 @@ while True:
         now = time.time()
         interval = cfg["export"].get("auto_save_interval_s", 0)
         if interval > 0 and now - last_auto_save >= interval:
-            if True:
-                # NOT saving image from ring. Take another image
+            if cfg["export"].get("auto_save_use_ring", False):                
+                # NOT saving image from ring. Retake another image
                 img = cam.capture_fullres()
                 meta = ring.get_last(1)[0][1]
                 exporter.save([(img, meta)])

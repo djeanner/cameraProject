@@ -46,12 +46,11 @@ The `config.json` file centralizes all configurable aspects of the Pi Cam Servic
   * `framerate`: Capture frames per second
   * `codec`: 'rgb' (or 'h264', if supported)
   * `video_mode`: 'stream' for continuous video, 'still' for single image captures
-* `ring`: Ring buffer configuration
+* `ring`: Requested number of frames (effective size auto-adjusted based on available RAM, image resolution, and format)
   * `size`: Number of frames to store in memory
-  * `downscale`: Ring buffer configuration
-    * `enable`: default true
-    * `width`: default 256
-    * `height`: default 192
+  * `downscale`: Optional reduction of image resolution for ring buffer
+    * `enable`: true/false — if false, full-res frames are stored
+    * `width`,`height`: dimensions for downscaled frames
 * `night`: Night mode parameters
   * `enable`: Enable or disable night mode
   * `dark_threshold`: Frame dark score below which the system considers it night
@@ -63,7 +62,7 @@ The `config.json` file centralizes all configurable aspects of the Pi Cam Servic
 * `export`: Image export settings
   * `base_dir`: Directory to save frames
   * `formats`: List of formats to save ['jpg', 'png', 'npy']
-  * `save_before_s`, `save_after_s`: Seconds of frames to save before and after a trigger
+  * `save_before_s`: Seconds of frames to save before and after a trigger
   * `stack_dark_frames`: Whether to stack multiple frames to improve low-light images
   * `stack_count`: Number of frames to stack
   * `auto_save_interval_s`: Interval in seconds for automatic hourly (or custom) saves
@@ -86,8 +85,8 @@ python3 main.py
 4. External triggers (`echo "COMMAND" | nc <pi_ip> 9999`):
 
 ```bash
-echo "save jpg" | nc raspberrypi 9999
-echo "save png" | nc raspberrypi 9999
+echo "save jpg" | nc raspberrypi 9999      # Capture a full-res frame
+echo "pastStack jpg" | nc raspberrypi 9999 # Capture a stacked image from ring buffer
 echo "night_level" | nc raspberrypi 9999  # Query night status
 ```
 
