@@ -24,6 +24,7 @@
     "gain": 6.0
   },
   "export": {
+    "auto_save_use_ring": false,
     "base_dir": "./captures",
     "formats": [
       "jpg",

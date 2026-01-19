@@ -5,14 +5,15 @@ from picamera2 import Picamera2
 from metadata import FrameMetadata
 
 class CameraController:
-    def __init__(self, cfg: dict, ring) -> None:
+    def __init__(self, cfg: dict, cfgRing: dict, ring) -> None:
         self.cfg = cfg
+        self.cfgRing = cfgRing
         self.ring = ring
         self.cam = Picamera2()
         self.frame_id = 0
         self.mode = None
         self.night_cfg = None
-        self.downscale_cfg = self.cfg.get("downscale", {
+        self.downscale_cfg = self.cfgRing.get("downscale", {
             "enable": True,
             "width": 256,
             "height": 192

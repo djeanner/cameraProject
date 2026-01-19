@@ -91,15 +91,16 @@ def adjust_ring_size(cfg: dict) -> int:
     usable_bytes = int(vm.available * 0.80)
 
     # Determine ring image resolution
+    source = ""
     downscale_cfg = cfg["ring"].get("downscale", {})
     if downscale_cfg.get("enable", False):
         ring_width = downscale_cfg["width"]
         ring_height = downscale_cfg["height"]
-        source = "downscaled ring images"
+        source = " true (downscaled ring images)"
     else:
         ring_width = cfg["camera"]["width"]
         ring_height = cfg["camera"]["height"]
-        source = "full-resolution camera images"
+        source = "false (full-resolution camera images)"
 
     channels = 3  # RGB
     dtype = np.uint8
@@ -122,18 +123,20 @@ def adjust_ring_size(cfg: dict) -> int:
     # Always log calculation details (expert traceability)
     logging.info(
         "Ring memory calculation details:\n"
-        "  Available RAM       : %.1f MiB\n"
-        "  Usable (80%%)        : %.1f MiB\n"
+        "  Available RAM        : %.1f MiB\n"
+        "  Usable (80%%)         : %.1f MiB\n"
         "  Image format         : RGB uint8\n"
         "  Ring image size      : %dx%d\n"
         "  Bytes per image      : %.1f KiB\n"
-        "  Max images possible  : %d\n",
+        "  Max images possible  : %d\n"
+        "  downscale.enable     : %s\n",
         vm.available / (1024 * 1024),
         usable_bytes / (1024 * 1024),
         ring_width,
         ring_height,
         bytes_per_image / 1024,
-        max_images
+        max_images,
+        source
     )
 
     return effective
@@ -150,7 +153,7 @@ setup_logging(cfg)
 effective_ring_size = adjust_ring_size(cfg)
 ring = RingBuffer(effective_ring_size)
 exporter = Exporter(cfg["export"])
-cam = CameraController(cfg["camera"], ring)
+cam = CameraController(cfg["camera"], cfg["ring"], ring)
 night_ctrl = NightModeController(cfg["night"])
 
 process = psutil.Process()
@@ -320,20 +323,21 @@ while True:
         interval = cfg["export"].get("auto_save_interval_s", 0)
         if interval > 0 and now - last_auto_save >= interval:
             if cfg["export"].get("auto_save_use_ring", False):                
-                # NOT saving image from ring. Retake another image
-                img = cam.capture_fullres()
-                meta = ring.get_last(1)[0][1]
-                exporter.save([(img, meta)])
-                del img
-            else:
                 # save image from ring // may require to move the  exept below aboveAuto-save logic 
                 frames = ring.get_last(1)
                 if frames:
                     try:
-                        saved = exporter.save(frames)
-                        logging.info(f"Auto-save: {saved}")
+                        saved = exporter.save(frames,"jpg")
+                        logging.info(f"Auto-save from ring: {saved}")
                     except Exception as e:
-                        logging.error(f"Auto-save failed: {e}")
+                        logging.error(f"Auto-save from ring failed: {e}")
+            else:
+                # NOT saving image from ring. Retake another image
+                img = cam.capture_fullres()
+                meta = ring.get_last(1)[0][1]
+                exporter.save([(img, meta)],"jpg")
+                del img
+                logging.info(f"Auto-save fresh image")
             last_auto_save = now
 
         # --- HARD SAFETY EXIT ---
