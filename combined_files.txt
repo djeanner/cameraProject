@@ -9,7 +9,12 @@
     "video_mode": "stream"
   },
   "ring": {
-    "size": 300
+    "size": 300,
+    "downscale": {
+      "enable": false,
+      "width": 256,
+      "height": 192
+    }
   },
   "night": {
     "enable": true,
@@ -27,7 +32,6 @@
       "png"
     ],
     "save_before_s": 5,
-    "save_after_s": 3,
     "stack_dark_frames": true,
     "stack_count": 4,
     "auto_save_interval_s": 900
@@ -54,7 +58,11 @@ class CameraController:
         self.frame_id = 0
         self.mode = None
         self.night_cfg = None
-
+        self.downscale_cfg = self.cfg.get("downscale", {
+            "enable": True,
+            "width": 256,
+            "height": 192
+        })
     def start_video(self) -> None:
         if self.mode == "video":
             return
@@ -86,11 +94,16 @@ class CameraController:
     def capture_once(self) -> None:
         img = self.cam.capture_array()
 
-        # VERY IMPORTANT: downscale for ring buffer
-        small = cv2.resize(img, (256, 192), interpolation=cv2.INTER_AREA)
+        # Optional downscale for ring buffer
+        if self.downscale_cfg.get("enable", True):
+            w = self.downscale_cfg["width"]
+            h = self.downscale_cfg["height"]
+            ring_img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+        else:
+            ring_img = img
 
         ts = time.time()
-        score = float(small.mean())
+        score = float(ring_img.mean())
 
         meta = FrameMetadata(
             frame_id=self.frame_id,
@@ -99,8 +112,9 @@ class CameraController:
             night_mode=(self.mode == "still")
         )
 
-        self.ring.append((small, meta))
+        self.ring.append((ring_img, meta))
         self.frame_id += 1
+
 
     def capture_fullres(self) -> np.ndarray:
         """Capture a full-resolution frame for export"""
@@ -169,29 +183,157 @@ class Exporter:
         return self.save([(stacked, frames[-1][1])], formats)
 -e ===== pi_cam_service_py311/main.py =====
 
+import concurrent.futures
+import gc
 import json
 import logging
 import time
-import concurrent.futures
-import psutil
-import gc
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
-from ring_buffer import RingBuffer
+import numpy as np
+import psutil
+
 from camera_controller import CameraController
 from exporter import Exporter
-from trigger_server import TriggerServer
 from night_mode import NightModeController
+from ring_buffer import RingBuffer
+from trigger_server import TriggerServer
+from metadata import FrameMetadata
 
+def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, FrameMetadata]]:
+    """
+    Récupère les images à sauvegarder pour la commande 'save'.
+    
+    - Le point central correspond à 'save_before_s' secondes avant le trigger.
+    - Si stack_dark_frames est activé, on empile 'stack_count' images autour.
+    """
+    fps = cfg["camera"]["framerate"]
+    save_before_s = cfg["export"]["save_before_s"]
+    stack_count = cfg["export"]["stack_count"]
+
+    # nombre total d'images à récupérer de la fenêtre complète
+    total_frames = int(save_before_s * fps)
+    frames = ring.get_last(total_frames)
+
+    if not frames:
+        return []
+
+    if not cfg["export"]["stack_dark_frames"]:
+        # pas d'empilement, on renvoie toute la fenêtre
+        return frames
+
+    # index approximatif du point central à -save_before_s secondes
+    center_idx = max(0, len(frames) - int(fps * save_before_s))
+
+    # indices autour du centre pour empilement
+    half_stack = stack_count // 2
+    start_idx = max(0, center_idx - half_stack)
+    end_idx = min(len(frames), start_idx + stack_count)
+
+    return frames[start_idx:end_idx]
+
+def setup_logging(cfg: dict) -> None:
+    log_level = getattr(logging, cfg["logging"]["level"].upper(), logging.INFO)
+
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    log_file = log_dir / "camera_service.log"
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # Avoid duplicate handlers if restarted
+    if logger.handlers:
+        return
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Console handler
+    console = logging.StreamHandler()
+    console.setLevel(log_level)
+    console.setFormatter(formatter)
+
+    # Rotating file handler
+    file = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,  # 5 MiB
+        backupCount=3
+    )
+    file.setLevel(log_level)
+    file.setFormatter(formatter)
+
+    logger.addHandler(console)
+    logger.addHandler(file)
+
+def adjust_ring_size(cfg: dict) -> int:
+    vm = psutil.virtual_memory()
+
+    usable_bytes = int(vm.available * 0.80)
+
+    # Determine ring image resolution
+    downscale_cfg = cfg["ring"].get("downscale", {})
+    if downscale_cfg.get("enable", False):
+        ring_width = downscale_cfg["width"]
+        ring_height = downscale_cfg["height"]
+        source = "downscaled ring images"
+    else:
+        ring_width = cfg["camera"]["width"]
+        ring_height = cfg["camera"]["height"]
+        source = "full-resolution camera images"
+
+    channels = 3  # RGB
+    dtype = np.uint8
+
+    bytes_per_pixel = np.dtype(dtype).itemsize * channels
+    bytes_per_image = ring_width * ring_height * bytes_per_pixel
+
+    max_images = max(1, usable_bytes // bytes_per_image)
+
+    requested = cfg["ring"]["size"]
+    effective = min(requested, max_images)
+
+    # Log adjustment ONLY if needed
+    if effective != requested:
+        logging.warning(
+            "Ring buffer size adjusted: requested=%d → effective=%d",
+            requested, effective
+        )
+
+    # Always log calculation details (expert traceability)
+    logging.info(
+        "Ring memory calculation details:\n"
+        "  Available RAM       : %.1f MiB\n"
+        "  Usable (80%%)        : %.1f MiB\n"
+        "  Image format         : RGB uint8\n"
+        "  Ring image size      : %dx%d\n"
+        "  Bytes per image      : %.1f KiB\n"
+        "  Max images possible  : %d\n",
+        vm.available / (1024 * 1024),
+        usable_bytes / (1024 * 1024),
+        ring_width,
+        ring_height,
+        bytes_per_image / 1024,
+        max_images
+    )
+
+    return effective
+    
 # Configuration
 
 with open("config.json") as f:
     cfg = json.load(f)
 
-logging.basicConfig(level=cfg["logging"]["level"])
+setup_logging(cfg)
 
 # Initialize components
 
-ring = RingBuffer(cfg["ring"]["size"])
+effective_ring_size = adjust_ring_size(cfg)
+ring = RingBuffer(effective_ring_size)
 exporter = Exporter(cfg["export"])
 cam = CameraController(cfg["camera"], ring)
 night_ctrl = NightModeController(cfg["night"])
@@ -203,7 +345,7 @@ last_auto_save = 0
 CAPTURE_TIMEOUT = cfg["camera"].get("capture_timeout_s", 4.0)
 MAX_RSS_MB = 350  # hard safety limit for Pi 1B+
 
-# ---------------- HELPERS ----------------
+# Helper
 
 def log_mode_change(old, new):
     logging.info("Camera configuration updated:")
@@ -217,42 +359,77 @@ def log_memory(prefix=""):
     logging.info("%sRSS=%.1f MiB | SWAP=%.1f%%", prefix, rss, swap)
     return rss, swap
 
-# ---------------- START CAMERA ----------------
+# Start camera
 
 cam.start_video()
 log_mode_change(None, cam.describe_mode())
 
-# ---------------- TRIGGER ----------------
+# Trigger handler
 
 def on_trigger(cmd: str) -> str:
     cmd = cmd.strip()
 
-    if cmd.startswith("store"):
-        img = cam.capture_fullres()
-        meta = ring.get_last(1)[0][1]
-        saved = exporter.save([(img, meta)])
-        del img
-        return "SAVED:" + ",".join(saved)
-    
     if cmd.startswith("save"):
         parts = cmd.split()
         formats = parts[1:] if len(parts) > 1 else None
 
-        frames = ring.get_last_seconds(
-            cfg["export"]["save_before_s"],
-            cfg["camera"]["framerate"]
-        )
+        # Capture full-resolution image directly
+        img = cam.capture_fullres()
+        meta = ring.get_last(1)[0][1]
+        saved_files = exporter.save([(img, meta)], formats)
+        del img
 
-        if not frames:
-            return "NO_FRAMES"
+        age_s = time.time() - meta.timestamp  # time since capture
 
-        if cfg["export"]["stack_dark_frames"]:
-            used = frames[-cfg["export"]["stack_count"]:]
-            saved = exporter.stack_and_save(used, formats)
+        if saved_files:
+            msg = f"Saved single full-resolution image: {saved_files[0]} (timestamp: {meta.timestamp:.3f}, age: {age_s:.2f}s)"
         else:
-            saved = exporter.save(frames, formats)
+            msg = "NOT_SAVED"
 
-        return "SAVED:" + ",".join(saved) if saved else "NOT_SAVED"
+        logging.info(msg)
+        return msg
+
+    if cmd.startswith("pastStack"):
+        parts = cmd.split()
+        formats = parts[1:] if len(parts) > 1 else None
+
+        frames_to_save = get_frames_for_save(ring, cfg)
+        if not frames_to_save:
+            msg = "NO_FRAMES"
+            logging.info(msg)
+            return msg
+
+        now = time.time()
+        first_frame = frames_to_save[0][1]
+        last_frame = frames_to_save[-1][1]
+        age_first = now - first_frame.timestamp
+        age_last = now - last_frame.timestamp
+
+        # Determine whether stacking is applied
+        if cfg["export"]["stack_dark_frames"]:
+            saved_files = exporter.stack_and_save(frames_to_save, formats)
+            if saved_files:
+                msg = (
+                    f"Saved stacked image: {saved_files[0]} | stack of {len(frames_to_save)} frames | "
+                    f"first frame timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s) | "
+                    f"last frame timestamp: {last_frame.timestamp:.3f} (age: {age_last:.2f}s)"
+                    f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
+                )
+            else:
+                msg = "NOT_SAVED"
+        else:
+            saved_files = exporter.save(frames_to_save, formats)
+            if saved_files:
+                msg = (
+                    f"Saved {len(saved_files)} separate images from ring buffer, "
+                    f"starting at timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s)"
+                    f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
+                )
+            else:
+                msg = "NOT_SAVED"
+
+        logging.info(msg)
+        return msg
 
     if cmd == "night_level":
         if not ring.buffer:
@@ -265,7 +442,7 @@ def on_trigger(cmd: str) -> str:
             f"THRESH={cfg['night']['dark_threshold']} "
             f"STATUS={status}"
         )
-
+        
     if cmd == "health":
         rss, swap = log_memory("HEALTH ")
         return f"RSS={rss:.1f}MiB SWAP={swap:.1f}%"
@@ -281,6 +458,7 @@ logging.info("Trigger server started")
 logging.info("Starting main capture loop")
 while True:
     try:
+        # test health
         rss, swap = log_memory() if time.time() - last_mem_log > 60 else (None, None)
         last_mem_log = time.time()
 
@@ -326,10 +504,21 @@ while True:
         now = time.time()
         interval = cfg["export"].get("auto_save_interval_s", 0)
         if interval > 0 and now - last_auto_save >= interval:
-            img = cam.capture_fullres()
-            meta = ring.get_last(1)[0][1]
-            exporter.save([(img, meta)])
-            del img
+            if cfg["export"].get("auto_save_use_ring", False):                
+                # NOT saving image from ring. Retake another image
+                img = cam.capture_fullres()
+                meta = ring.get_last(1)[0][1]
+                exporter.save([(img, meta)])
+                del img
+            else:
+                # save image from ring // may require to move the  exept below aboveAuto-save logic 
+                frames = ring.get_last(1)
+                if frames:
+                    try:
+                        saved = exporter.save(frames)
+                        logging.info(f"Auto-save: {saved}")
+                    except Exception as e:
+                        logging.error(f"Auto-save failed: {e}")
             last_auto_save = now
 
         # --- HARD SAFETY EXIT ---
