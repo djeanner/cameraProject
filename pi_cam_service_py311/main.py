@@ -1,20 +1,58 @@
+import concurrent.futures
+import gc
 import json
 import logging
 import time
-import concurrent.futures
-import psutil
-import gc
-import numpy as np
-
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from ring_buffer import RingBuffer
+import numpy as np
+import psutil
+
 from camera_controller import CameraController
 from exporter import Exporter
-from trigger_server import TriggerServer
 from night_mode import NightModeController
-    
+from ring_buffer import RingBuffer
+from trigger_server import TriggerServer
+
+
+def setup_logging(cfg: dict) -> None:
+    log_level = getattr(logging, cfg["logging"]["level"].upper(), logging.INFO)
+
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    log_file = log_dir / "camera_service.log"
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # Avoid duplicate handlers if restarted
+    if logger.handlers:
+        return
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Console handler
+    console = logging.StreamHandler()
+    console.setLevel(log_level)
+    console.setFormatter(formatter)
+
+    # Rotating file handler
+    file = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,  # 5 MiB
+        backupCount=3
+    )
+    file.setLevel(log_level)
+    file.setFormatter(formatter)
+
+    logger.addHandler(console)
+    logger.addHandler(file)
+
 def adjust_ring_size(cfg: dict) -> int:
     vm = psutil.virtual_memory()
 
@@ -73,8 +111,7 @@ def adjust_ring_size(cfg: dict) -> int:
 with open("config.json") as f:
     cfg = json.load(f)
 
-logging.basicConfig(level=cfg["logging"]["level"])
-
+setup_logging(cfg)
 
 # Initialize components
 
