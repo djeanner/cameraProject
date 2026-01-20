@@ -19,18 +19,37 @@ from ring_buffer import RingBuffer
 from trigger_server import TriggerServer
 from metadata import FrameMetadata
 
+def update_cfg(cfg: dict, key_path: str, value) -> bool:
+    """
+    Update a nested cfg key with a new value.
+    key_path: e.g., "camera.framerate" or "night.bright_threshold"
+    value: new value (converted to appropriate type if needed)
+    Returns True if updated, False if key not found.
+    """
+    keys = key_path.split(".")
+    sub = cfg
+    for k in keys[:-1]:
+        if k not in sub:
+            return False
+        sub = sub[k]
+    last_key = keys[-1]
+    if last_key not in sub:
+        return False
+
+    current_type = type(sub[last_key])
+    if current_type is bool:
+        # accept 1/0, true/false
+        sub[last_key] = str(value).lower() in ("1", "true", "yes")
+    else:
+        sub[last_key] = current_type(value)
+
+    return True
+
 def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, FrameMetadata]]:
-    """
-    Récupère les images à sauvegarder pour la commande 'save'.
-    
-    - Le point central correspond à 'save_before_s' secondes avant le trigger.
-    - Si stack_dark_frames est activé, on empile 'stack_count' images autour.
-    """
     fps = cfg["camera"]["framerate"]
     save_before_s = cfg["export"]["save_before_s"]
     stack_count = cfg["export"]["stack_count"]
 
-    # nombre total d'images à récupérer de la fenêtre complète
     total_frames = int(save_before_s * fps)
     frames = ring.get_last(total_frames)
 
@@ -38,13 +57,10 @@ def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, F
         return []
 
     if not cfg["export"]["stack_dark_frames"]:
-        # pas d'empilement, on renvoie toute la fenêtre
         return frames
 
-    # index approximatif du point central à -save_before_s secondes
     center_idx = max(0, len(frames) - int(fps * save_before_s))
 
-    # indices autour du centre pour empilement
     half_stack = stack_count // 2
     start_idx = max(0, center_idx - half_stack)
     end_idx = min(len(frames), start_idx + stack_count)
@@ -156,7 +172,7 @@ setup_logging(cfg)
 effective_ring_size = adjust_ring_size(cfg)
 ring = RingBuffer(effective_ring_size)
 exporter = Exporter(cfg["export"])
-cam = CameraController(cfg["camera"], cfg["ring"], ring)
+cam = CameraController(cfg, ring)
 night_ctrl = NightModeController(cfg["night"])
 
 process = psutil.Process()
@@ -189,7 +205,71 @@ log_mode_change(None, cam.describe_mode())
 
 def on_trigger(cmd: str, conn=None) -> str:
     cmd = cmd.strip()
+    
+    if cmd.startswith("set"):
+        parts = cmd.split(maxsplit=2)
+        if len(parts) < 3:
+            return "ERROR: usage set <key_path> <value>"
 
+        key_path, value = parts[1], parts[2]
+
+        # Read old value for logging
+        try:
+            keys = key_path.split(".")
+            sub = cfg
+            for k in keys[:-1]:
+                sub = sub[k]
+            last_key = keys[-1]
+            old_value = sub.get(last_key, None)
+        except Exception:
+            old_value = None
+
+        # Update cfg
+        success = update_cfg(cfg, key_path, value)
+
+        if success:
+            # Apply live changes to the camera if relevant
+            try:
+                cam.update_settings()
+                logging.info(
+                    "Parameter updated via trigger: %s : %s → %s",
+                    key_path, old_value, value
+                )
+            except Exception as e:
+                logging.warning(
+                    "Parameter updated but failed to apply live: %s : %s → %s | %s",
+                    key_path, old_value, value, e
+                )
+
+            return f"OK: changed {key_path} from {old_value} to {value}"
+        else:
+            logging.warning("Failed to update parameter via trigger: %s → %s", key_path, value)
+            return f"ERROR: invalid key {key_path}"
+
+    if cmd.startswith("overwrite_config"):
+        try:
+            dump_file = Path("config.json")  # file to generate
+            # Write current cfg to JSON with indentation
+            with dump_file.open("w") as f:
+                json.dump(cfg, f, indent=4, sort_keys=True)
+            
+            logging.info("Current configuration dumped to %s", dump_file)
+            return f"OK: configuration dumped to {dump_file}"
+
+        except Exception as e:
+            logging.error("Failed to dump configuration: %s", e)
+            return f"ERROR: failed to dump configuration: {e}"
+        
+    if cmd.startswith("dump_config"):
+        try:
+            # Serialize the current cfg to JSON with indentation
+            cfg_json = json.dumps(cfg, indent=4, sort_keys=True)
+            logging.info("Configuration sent to trigger client")
+            return cfg_json
+        except Exception as e:
+            logging.error("Failed to serialize configuration: %s", e)
+            return f"ERROR: failed to get configuration: {e}"
+        
     if cmd.startswith("save"):
         parts = cmd.split()
         formats = parts[1:] if len(parts) > 1 else None
@@ -247,7 +327,6 @@ def on_trigger(cmd: str, conn=None) -> str:
                     f"starting at timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s)"
                     f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
                     f"bright_threshold: > {cfg['night']['bright_threshold']} "
-
                 )
             else:
                 msg = "NOT_SAVED"
@@ -327,9 +406,13 @@ if mjpeg_cfg.get("enable", False):
     MJPEGServer(mjpeg_port, ring, fps=mjpeg_fps).start()
     RESET = "\033[0m"
     GREEN = "\033[32m"
-    YELLOW= "\033[33m"
+    YELLOW = "\033[33m"
     logging.info(f"MJPEG server started on port {mjpeg_port}")
-    logging.info(f"Open {GREEN}http://raspberrypi:{mjpeg_port}/stream{RESET} in VLC, MJPEG-supported browsers ({mjpeg_fps} FPS) or with {YELLOW}python3 client.py{RESET}")
+    logging.info(
+        f"Open {GREEN}http://raspberrypi:{mjpeg_port}/stream{RESET} "
+        f"in VLC, MJPEG-supported browsers ({mjpeg_fps} FPS) "
+        f"or with {YELLOW}python3 client.py{RESET}"
+    )
 
 # Main loop with timeout handling
 logging.info("Starting main capture loop")
@@ -354,7 +437,10 @@ while True:
         cam.capture_once()
         duration = time.time() - start
         if duration > CAPTURE_TIMEOUT:
-            logging.warning("Camera capture slow (%.1fs > %.1fs) at %s", duration, CAPTURE_TIMEOUT, time.strftime("%H:%M:%S"))
+            logging.warning(
+                "Camera capture slow (%.1fs > %.1fs) at %s",
+                duration, CAPTURE_TIMEOUT, time.strftime("%H:%M:%S")
+            )
 
         event = None
         if ring.buffer:
@@ -386,7 +472,7 @@ while True:
                 frames = ring.get_last(1)
                 if frames:
                     try:
-                        saved = exporter.save(frames,"jpg")
+                        saved = exporter.save(frames, "jpg")
                         logging.info(f"Auto-save from ring: {saved}")
                     except Exception as e:
                         logging.error(f"Auto-save from ring failed: {e}")
@@ -394,9 +480,9 @@ while True:
                 # NOT saving image from ring. Retake another image
                 img = cam.capture_fullres()
                 meta = ring.get_last(1)[0][1]
-                exporter.save([(img, meta)],"jpg")
+                exporter.save([(img, meta)], "jpg")
                 del img
-                logging.info(f"Auto-save fresh image")
+                logging.info("Auto-save fresh image")
             last_auto_save = now
 
         # --- HARD SAFETY EXIT ---
@@ -408,6 +494,7 @@ while True:
                 rss, MAX_RSS_MB
             )
             raise SystemExit(42)
+
         # Slow down capture in still mode
         if cam.mode == "still":
             time.sleep(2)

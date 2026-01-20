@@ -212,17 +212,10 @@ from trigger_server import TriggerServer
 from metadata import FrameMetadata
 
 def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, FrameMetadata]]:
-    """
-    Récupère les images à sauvegarder pour la commande 'save'.
-    
-    - Le point central correspond à 'save_before_s' secondes avant le trigger.
-    - Si stack_dark_frames est activé, on empile 'stack_count' images autour.
-    """
     fps = cfg["camera"]["framerate"]
     save_before_s = cfg["export"]["save_before_s"]
     stack_count = cfg["export"]["stack_count"]
 
-    # nombre total d'images à récupérer de la fenêtre complète
     total_frames = int(save_before_s * fps)
     frames = ring.get_last(total_frames)
 
@@ -230,13 +223,10 @@ def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, F
         return []
 
     if not cfg["export"]["stack_dark_frames"]:
-        # pas d'empilement, on renvoie toute la fenêtre
         return frames
 
-    # index approximatif du point central à -save_before_s secondes
     center_idx = max(0, len(frames) - int(fps * save_before_s))
 
-    # indices autour du centre pour empilement
     half_stack = stack_count // 2
     start_idx = max(0, center_idx - half_stack)
     end_idx = min(len(frames), start_idx + stack_count)
@@ -439,7 +429,6 @@ def on_trigger(cmd: str, conn=None) -> str:
                     f"starting at timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s)"
                     f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
                     f"bright_threshold: > {cfg['night']['bright_threshold']} "
-
                 )
             else:
                 msg = "NOT_SAVED"
@@ -519,9 +508,13 @@ if mjpeg_cfg.get("enable", False):
     MJPEGServer(mjpeg_port, ring, fps=mjpeg_fps).start()
     RESET = "\033[0m"
     GREEN = "\033[32m"
-    YELLOW= "\033[33m"
+    YELLOW = "\033[33m"
     logging.info(f"MJPEG server started on port {mjpeg_port}")
-    logging.info(f"Open {GREEN}http://raspberrypi:{mjpeg_port}/stream{RESET} in VLC, MJPEG-supported browsers ({mjpeg_fps} FPS) or with {YELLOW}python3 client.py{RESET}")
+    logging.info(
+        f"Open {GREEN}http://raspberrypi:{mjpeg_port}/stream{RESET} "
+        f"in VLC, MJPEG-supported browsers ({mjpeg_fps} FPS) "
+        f"or with {YELLOW}python3 client.py{RESET}"
+    )
 
 # Main loop with timeout handling
 logging.info("Starting main capture loop")
@@ -546,7 +539,10 @@ while True:
         cam.capture_once()
         duration = time.time() - start
         if duration > CAPTURE_TIMEOUT:
-            logging.warning("Camera capture slow (%.1fs > %.1fs) at %s", duration, CAPTURE_TIMEOUT, time.strftime("%H:%M:%S"))
+            logging.warning(
+                "Camera capture slow (%.1fs > %.1fs) at %s",
+                duration, CAPTURE_TIMEOUT, time.strftime("%H:%M:%S")
+            )
 
         event = None
         if ring.buffer:
@@ -578,7 +574,7 @@ while True:
                 frames = ring.get_last(1)
                 if frames:
                     try:
-                        saved = exporter.save(frames,"jpg")
+                        saved = exporter.save(frames, "jpg")
                         logging.info(f"Auto-save from ring: {saved}")
                     except Exception as e:
                         logging.error(f"Auto-save from ring failed: {e}")
@@ -586,9 +582,9 @@ while True:
                 # NOT saving image from ring. Retake another image
                 img = cam.capture_fullres()
                 meta = ring.get_last(1)[0][1]
-                exporter.save([(img, meta)],"jpg")
+                exporter.save([(img, meta)], "jpg")
                 del img
-                logging.info(f"Auto-save fresh image")
+                logging.info("Auto-save fresh image")
             last_auto_save = now
 
         # --- HARD SAFETY EXIT ---
@@ -600,6 +596,7 @@ while True:
                 rss, MAX_RSS_MB
             )
             raise SystemExit(42)
+
         # Slow down capture in still mode
         if cam.mode == "still":
             time.sleep(2)

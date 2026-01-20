@@ -71,6 +71,12 @@ echo "save png" | nc raspberrypi 9999       # Capture a full-res frame png/jpg
 echo "pastStack png" | nc raspberrypi 9999  # Capture a stacked image from ring buffer png/jpg
 echo "night_level" | nc raspberrypi 9999    # Query night status
 echo "health" | nc raspberrypi 9999         # Check system health
+echo "set camera.framerate 5" | nc raspberrypi 9999 
+echo "set night.bright_threshold 45" | nc raspberrypi 9999 
+echo "dump_config" | nc raspberrypi 9999    # get configure as config.json
+echo "overwrite_config" | nc raspberrypi 9999    # overwrites the config.json with current values
+
+
 ```
 
 ### Streaming

@@ -1,49 +1,49 @@
 {
-  "camera": {
-    "width": 1024,
-    "height": 768,
-    "framerate": 10,
-    "codec": "rgb",
-    "video_mode": "stream"
-  },
-  "ring": {
-    "size": 300,
-    "downscale": {
-      "enable": false,
-      "width": 256,
-      "height": 192
+    "camera": {
+        "codec": "rgb",
+        "framerate": 10,
+        "height": 768,
+        "video_mode": "stream",
+        "width": 1024
+    },
+    "export": {
+        "auto_save_interval_s": 900,
+        "auto_save_use_ring": false,
+        "base_dir": "./captures",
+        "formats": [
+            "jpg",
+            "png"
+        ],
+        "save_before_s": 5,
+        "stack_count": 4,
+        "stack_dark_frames": true
+    },
+    "logging": {
+        "level": "INFO"
+    },
+    "mjpeg_server": {
+        "enable": true,
+        "fps": 2,
+        "port": 8080
+    },
+    "network": {
+        "trigger_port": 9999
+    },
+    "night": {
+        "bright_threshold": 240,
+        "dark_threshold": 50,
+        "enable": true,
+        "exposure_us": 2000000,
+        "gain": 6.0,
+        "min_dark_frames": 20,
+        "mode": "still"
+    },
+    "ring": {
+        "downscale": {
+            "enable": false,
+            "height": 192,
+            "width": 256
+        },
+        "size": 300
     }
-  },
-  "night": {
-    "enable": true,
-    "dark_threshold": 50,
-    "bright_threshold": 500,
-    "min_dark_frames": 20,
-    "mode": "still",
-    "exposure_us": 2000000,
-    "gain": 6.0
-  },
-  "export": {
-    "auto_save_use_ring": false,
-    "base_dir": "./captures",
-    "formats": [
-      "jpg",
-      "png"
-    ],
-    "save_before_s": 5,
-    "stack_dark_frames": true,
-    "stack_count": 4,
-    "auto_save_interval_s": 900
-  },
-  "network": {
-    "trigger_port": 9999
-  },
-  "mjpeg_server": {
-    "enable": true,
-    "port": 8080,
-    "fps": 2
-  },
-  "logging": {
-    "level": "INFO"
-  }
 }
