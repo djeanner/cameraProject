@@ -1,110 +1,130 @@
 -e ===== pi_cam_service_py311/config.json =====
 
 {
-  "camera": {
-    "width": 1024,
-    "height": 768,
-    "framerate": 10,
-    "codec": "rgb",
-    "video_mode": "stream"
-  },
-  "ring": {
-    "size": 300,
-    "downscale": {
-      "enable": false,
-      "width": 256,
-      "height": 192
+    "camera": {
+        "codec": "rgb",
+        "framerate": 10,
+        "height": 768,
+        "video_mode": "stream",
+        "width": 1024
+    },
+    "export": {
+        "auto_save_interval_s": 900,
+        "auto_save_use_ring": false,
+        "base_dir": "./captures",
+        "formats": [
+            "jpg",
+            "png"
+        ],
+        "save_before_s": 5,
+        "stack_count": 4,
+        "stack_dark_frames": true
+    },
+    "logging": {
+        "level": "INFO"
+    },
+    "mjpeg_server": {
+        "enable": true,
+        "fps": 2,
+        "port": 8080
+    },
+    "network": {
+        "trigger_port": 9999
+    },
+    "night": {
+        "bright_threshold": 240,
+        "dark_threshold": 50,
+        "enable": true,
+        "exposure_us": 2000000,
+        "gain": 6.0,
+        "min_dark_frames": 20,
+        "mode": "still"
+    },
+    "ring": {
+        "downscale": {
+            "enable": false,
+            "height": 192,
+            "width": 256
+        },
+        "size": 300
     }
-  },
-  "night": {
-    "enable": true,
-    "dark_threshold": 50,
-    "bright_threshold": 500,
-    "min_dark_frames": 20,
-    "mode": "still",
-    "exposure_us": 2000000,
-    "gain": 6.0
-  },
-  "export": {
-    "auto_save_use_ring": false,
-    "base_dir": "./captures",
-    "formats": [
-      "jpg",
-      "png"
-    ],
-    "save_before_s": 5,
-    "stack_dark_frames": true,
-    "stack_count": 4,
-    "auto_save_interval_s": 900
-  },
-  "network": {
-    "trigger_port": 9999
-  },
-  "mjpeg_server": {
-    "enable": true,
-    "port": 8080,
-    "fps": 2
-  },
-  "logging": {
-    "level": "INFO"
-  }
 }-e ===== pi_cam_service_py311/camera_controller.py =====
 
 import time
-import numpy as np
 import cv2
+import numpy as np
 from picamera2 import Picamera2
 from metadata import FrameMetadata
 
 class CameraController:
-    def __init__(self, cfg: dict, cfgRing: dict, ring) -> None:
-        self.cfg = cfg
-        self.cfgRing = cfgRing
+    def __init__(self, cfg: dict, ring) -> None:
+        self.cfg = cfg          # live reference to full config
         self.ring = ring
         self.cam = Picamera2()
         self.frame_id = 0
         self.mode = None
         self.night_cfg = None
-        self.downscale_cfg = self.cfgRing.get("downscale", {
-            "enable": True,
-            "width": 256,
-            "height": 192
-        })
-    def start_video(self) -> None:
+
+    # Universal getter for any parameter
+    def get_param(self, key_path: str):
+        """
+        Access any nested parameter using dot notation, e.g.,
+        get_param("camera.framerate") or get_param("night.exposure_us")
+        """
+        keys = key_path.split(".")
+        sub = self.cfg
+        for k in keys:
+            sub = sub[k]
+        return sub
+
+    # Start video mode
+    def start_video(self):
         if self.mode == "video":
             return
         self.cam.stop()
+
         cfg = self.cam.create_video_configuration(
-            main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
-            controls={"FrameRate": self.cfg["framerate"]}
+            main={
+                "size": (self.get_param("camera.width"), self.get_param("camera.height")),
+                "format": "RGB888"
+            },
+            controls={"FrameRate": self.get_param("camera.framerate")}
         )
         self.cam.configure(cfg)
         self.cam.start()
         self.mode = "video"
+        self.night_cfg = None
 
-    def start_still(self, night_cfg: dict) -> None:
+    # Start still/night mode
+    def start_still(self, night_cfg: dict):
         if self.mode == "still":
             return
         self.cam.stop()
+        self.night_cfg = night_cfg
+
         cfg = self.cam.create_still_configuration(
-            main={"size": (self.cfg["width"], self.cfg["height"]), "format": "RGB888"},
+            main={
+                "size": (self.get_param("camera.width"), self.get_param("camera.height")),
+                "format": "RGB888"
+            },
             controls={
-                "ExposureTime": night_cfg["exposure_us"],
-                "AnalogueGain": night_cfg["gain"]
+                "ExposureTime": self.night_cfg["exposure_us"],
+                "AnalogueGain": self.night_cfg["gain"]
             }
         )
         self.cam.configure(cfg)
         self.cam.start()
         self.mode = "still"
-        self.night_cfg = night_cfg
 
-    def capture_once(self) -> None:
+    # Capture a frame for the ring buffer
+    def capture_once(self):
         img = self.cam.capture_array()
 
-        # Optional downscale for ring buffer
-        if self.downscale_cfg.get("enable", True):
-            w = self.downscale_cfg["width"]
-            h = self.downscale_cfg["height"]
+        # Downscale for ring buffer if enabled
+        downscale = self.get_param("ring.downscale.enable") if self.get_param("ring.downscale") else True
+        if downscale:
+            w = self.get_param("ring.downscale.width")
+            h = self.get_param("ring.downscale.height")
             ring_img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
         else:
             ring_img = img
@@ -122,29 +142,41 @@ class CameraController:
         self.ring.append((ring_img, meta))
         self.frame_id += 1
 
-
-    def capture_fullres(self) -> np.ndarray:
-        """Capture a full-resolution frame for export"""
+    def capture_fullres(self):
         return self.cam.capture_array()
 
-    def describe_mode(self) -> dict:
+    # Apply live changes from cfg
+    def update_settings(self):
+        try:
+            if self.mode == "video":
+                self.cam.set_controls({"FrameRate": self.get_param("camera.framerate")})
+            elif self.mode == "still" and self.night_cfg:
+                self.cam.set_controls({
+                    "ExposureTime": self.night_cfg["exposure_us"],
+                    "AnalogueGain": self.night_cfg["gain"]
+                })
+        except Exception as e:
+            import logging
+            logging.warning("Failed to update camera settings live: %s", e)
+
+    def describe_mode(self):
         if self.mode == "video":
             return {
                 "mode": "video",
-                "resolution": f'{self.cfg["width"]}x{self.cfg["height"]}',
-                "framerate": self.cfg["framerate"],
+                "resolution": f'{self.get_param("camera.width")}x{self.get_param("camera.height")}',
+                "framerate": self.get_param("camera.framerate"),
                 "exposure_us": "auto",
                 "gain": "auto"
             }
-
         if self.mode == "still":
             return {
                 "mode": "still",
-                "resolution": f'{self.cfg["width"]}x{self.cfg["height"]}',
+                "resolution": f'{self.get_param("camera.width")}x{self.get_param("camera.height")}',
                 "framerate": None,
-                "exposure_us": self.night_cfg["exposure_us"],
-                "gain": self.night_cfg["gain"]
+                "exposure_us": self.night_cfg["exposure_us"] if self.night_cfg else None,
+                "gain": self.night_cfg["gain"] if self.night_cfg else None
             }
+        return {"mode": "unknown"}
 -e ===== pi_cam_service_py311/exporter.py =====
 
 
@@ -210,6 +242,32 @@ from night_mode import NightModeController
 from ring_buffer import RingBuffer
 from trigger_server import TriggerServer
 from metadata import FrameMetadata
+
+def update_cfg(cfg: dict, key_path: str, value) -> bool:
+    """
+    Update a nested cfg key with a new value.
+    key_path: e.g., "camera.framerate" or "night.bright_threshold"
+    value: new value (converted to appropriate type if needed)
+    Returns True if updated, False if key not found.
+    """
+    keys = key_path.split(".")
+    sub = cfg
+    for k in keys[:-1]:
+        if k not in sub:
+            return False
+        sub = sub[k]
+    last_key = keys[-1]
+    if last_key not in sub:
+        return False
+
+    current_type = type(sub[last_key])
+    if current_type is bool:
+        # accept 1/0, true/false
+        sub[last_key] = str(value).lower() in ("1", "true", "yes")
+    else:
+        sub[last_key] = current_type(value)
+
+    return True
 
 def get_frames_for_save(ring: RingBuffer, cfg: dict) -> list[tuple[np.ndarray, FrameMetadata]]:
     fps = cfg["camera"]["framerate"]
@@ -338,7 +396,7 @@ setup_logging(cfg)
 effective_ring_size = adjust_ring_size(cfg)
 ring = RingBuffer(effective_ring_size)
 exporter = Exporter(cfg["export"])
-cam = CameraController(cfg["camera"], cfg["ring"], ring)
+cam = CameraController(cfg, ring)
 night_ctrl = NightModeController(cfg["night"])
 
 process = psutil.Process()
@@ -371,7 +429,71 @@ log_mode_change(None, cam.describe_mode())
 
 def on_trigger(cmd: str, conn=None) -> str:
     cmd = cmd.strip()
+    
+    if cmd.startswith("set"):
+        parts = cmd.split(maxsplit=2)
+        if len(parts) < 3:
+            return "ERROR: usage set <key_path> <value>"
 
+        key_path, value = parts[1], parts[2]
+
+        # Read old value for logging
+        try:
+            keys = key_path.split(".")
+            sub = cfg
+            for k in keys[:-1]:
+                sub = sub[k]
+            last_key = keys[-1]
+            old_value = sub.get(last_key, None)
+        except Exception:
+            old_value = None
+
+        # Update cfg
+        success = update_cfg(cfg, key_path, value)
+
+        if success:
+            # Apply live changes to the camera if relevant
+            try:
+                cam.update_settings()
+                logging.info(
+                    "Parameter updated via trigger: %s : %s → %s",
+                    key_path, old_value, value
+                )
+            except Exception as e:
+                logging.warning(
+                    "Parameter updated but failed to apply live: %s : %s → %s | %s",
+                    key_path, old_value, value, e
+                )
+
+            return f"OK: changed {key_path} from {old_value} to {value}"
+        else:
+            logging.warning("Failed to update parameter via trigger: %s → %s", key_path, value)
+            return f"ERROR: invalid key {key_path}"
+
+    if cmd.startswith("overwrite_config"):
+        try:
+            dump_file = Path("config.json")  # file to generate
+            # Write current cfg to JSON with indentation
+            with dump_file.open("w") as f:
+                json.dump(cfg, f, indent=4, sort_keys=True)
+            
+            logging.info("Current configuration dumped to %s", dump_file)
+            return f"OK: configuration dumped to {dump_file}"
+
+        except Exception as e:
+            logging.error("Failed to dump configuration: %s", e)
+            return f"ERROR: failed to dump configuration: {e}"
+        
+    if cmd.startswith("dump_config"):
+        try:
+            # Serialize the current cfg to JSON with indentation
+            cfg_json = json.dumps(cfg, indent=4, sort_keys=True)
+            logging.info("Configuration sent to trigger client")
+            return cfg_json
+        except Exception as e:
+            logging.error("Failed to serialize configuration: %s", e)
+            return f"ERROR: failed to get configuration: {e}"
+        
     if cmd.startswith("save"):
         parts = cmd.split()
         formats = parts[1:] if len(parts) > 1 else None
