@@ -67,8 +67,8 @@ python3 main.py
 ### External triggers (via netcat)
 
 ```bash
-echo "save jpg" | nc raspberrypi 9999       # Capture a full-res frame
-echo "pastStack jpg" | nc raspberrypi 9999  # Capture a stacked image from ring buffer
+echo "save png" | nc raspberrypi 9999       # Capture a full-res frame png/jpg
+echo "pastStack png" | nc raspberrypi 9999  # Capture a stacked image from ring buffer png/jpg
 echo "night_level" | nc raspberrypi 9999    # Query night status
 echo "health" | nc raspberrypi 9999         # Check system health
 ```
@@ -77,7 +77,7 @@ echo "health" | nc raspberrypi 9999         # Check system health
 
    On the client side MJPEG stream with metadata (frame ID, timestamp, dark score, night mode):
 ```bash
-python3 client.py            # Continuous MJPEG client prints metadata per frame (port 10000)
+python3 client.py            # Continuous MJPEG client prints metadata per frame (open in http://raspberrypi:8080/stream)
 python3 clientShortStream.py # Short-term stream saving frames to folder (blocks other triggers uses port 9999)
 ```
     VLC or a browser can connect directly to MJPEG (`http://raspberrypi:8080/stream`) and display live video. Switching between VLC and Python client works safely.

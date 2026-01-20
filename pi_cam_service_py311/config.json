@@ -16,8 +16,8 @@
   },
   "night": {
     "enable": true,
-    "dark_threshold": 35,
-    "bright_threshold": 155,
+    "dark_threshold": 50,
+    "bright_threshold": 500,
     "min_dark_frames": 20,
     "mode": "still",
     "exposure_us": 2000000,
@@ -37,6 +37,11 @@
   },
   "network": {
     "trigger_port": 9999
+  },
+  "mjpeg_server": {
+    "enable": true,
+    "port": 8080,
+    "fps": 2
   },
   "logging": {
     "level": "INFO"

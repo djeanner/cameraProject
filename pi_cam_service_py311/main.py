@@ -246,6 +246,8 @@ def on_trigger(cmd: str, conn=None) -> str:
                     f"Saved {len(saved_files)} separate images from ring buffer, "
                     f"starting at timestamp: {first_frame.timestamp:.3f} (age: {age_first:.2f}s)"
                     f"(export.save_before_s: {cfg['export']['save_before_s']:.3f} s)"
+                    f"bright_threshold: > {cfg['night']['bright_threshold']} "
+
                 )
             else:
                 msg = "NOT_SAVED"
@@ -311,13 +313,23 @@ def on_trigger(cmd: str, conn=None) -> str:
 
 
 # Start trigger server
-
 TriggerServer(cfg["network"]["trigger_port"], on_trigger).start()
 logging.info("Trigger server started")
 
+# Start MJPEG Server
 from mjpeg_server import MJPEGServer
-MJPEGServer(8080, ring, fps=2).start()
-logging.info("mjpeg server started on port 8080")
+
+mjpeg_cfg = cfg.get("mjpeg_server", {})
+if mjpeg_cfg.get("enable", False):
+    mjpeg_port = mjpeg_cfg.get("port", 8080)
+    mjpeg_fps = mjpeg_cfg.get("fps", 2)
+
+    MJPEGServer(mjpeg_port, ring, fps=mjpeg_fps).start()
+    RESET = "\033[0m"
+    GREEN = "\033[32m"
+    YELLOW= "\033[33m"
+    logging.info(f"MJPEG server started on port {mjpeg_port}")
+    logging.info(f"Open {GREEN}http://raspberrypi:{mjpeg_port}/stream{RESET} in VLC, MJPEG-supported browsers ({mjpeg_fps} FPS) or with {YELLOW}python3 client.py{RESET}")
 
 # Main loop with timeout handling
 logging.info("Starting main capture loop")
