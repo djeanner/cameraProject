@@ -444,10 +444,13 @@ while True:
             raise SystemExit(102)
 
         duration = time.time() - start
+        # Take into account the exposure time during night
+        if cam.mode == "still":
+            duration -= cfg["night"]["exposure_us"] / 1000000
         if duration > CAPTURE_TIMEOUT:
             logging.warning(
-                "Camera capture slow (%.1fs > %.1fs) at %s",
-                duration, CAPTURE_TIMEOUT, time.strftime("%H:%M:%S")
+                "Camera capture slow (%.1fs > %.1fs)",
+                duration, CAPTURE_TIMEOUT
             )
 
         event = None
