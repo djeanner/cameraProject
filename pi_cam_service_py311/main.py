@@ -107,7 +107,7 @@ def setup_logging(cfg: dict) -> None:
 def adjust_ring_size(cfg: dict) -> int:
     vm = psutil.virtual_memory()
 
-    usable_bytes = int(vm.available * 0.80)
+    usable_bytes = int(vm.available * 0.50)
 
     # Determine ring image resolution
     source = ""
@@ -143,7 +143,7 @@ def adjust_ring_size(cfg: dict) -> int:
     logging.info(
         "Ring memory calculation details:\n"
         "  Available RAM        : %.1f MiB\n"
-        "  Usable (80%%)         : %.1f MiB\n"
+        "  Usable (50%%)         : %.1f MiB\n"
         "  Image format         : RGB uint8\n"
         "  Ring image size      : %dx%d\n"
         "  Bytes per image      : %.1f KiB\n"
@@ -432,9 +432,17 @@ while True:
             if swap > 70:
                 logging.warning("High swap %.1f%% → slowing capture", swap)
                 time.sleep(1.5)
-
         start = time.time()
-        cam.capture_once()
+
+        try:
+            cam.capture_once()
+        except Exception as e:
+            RESET = "\033[0m"
+            RED = "\033[31m"
+            YELLOW = "\033[33m"
+            logging.error("{RED}Camera capture failed. Exit{RESET}: %s", e)
+            raise SystemExit(102)
+
         duration = time.time() - start
         if duration > CAPTURE_TIMEOUT:
             logging.warning(
