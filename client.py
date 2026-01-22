@@ -13,37 +13,91 @@ BOUNDARY = b"--frame"
 
 
 def draw_overlay(img, headers):
-    """Draw metadata overlay on image"""
+    """Draw metadata overlay on image with parameterizable fonts, colors, and sizes."""
+
     h, w, _ = img.shape
 
+    # ----- Overlay configuration -----
+    # Circle (day/night) settings
+    circle_radius = 18
+    circle_margin = 12
+    circle_colors = {"day": (0, 255, 255), "night": (139, 0, 0)}  # BGR
+    circle_label_font = cv2.FONT_HERSHEY_SIMPLEX
+    circle_label_scale = 0.6
+    circle_label_thickness = 1
+    circle_label_color = (255, 255, 255)  # white
+
+    # Dark score text settings
+    dark_text_font = cv2.FONT_HERSHEY_SIMPLEX
+    dark_text_scale = 0.6
+    dark_text_thickness = 1
+    dark_text_color = (255, 255, 255)
+
+    # HUD (top-left) text settings
+    hud_font = cv2.FONT_HERSHEY_SIMPLEX
+    hud_scale = 0.6
+    hud_thickness = 1
+    hud_color_day = (255, 255, 255)
+    hud_color_night = (0, 255, 0)
+    hud_line_spacing = 30
+    hud_start_y = 25
+    hud_start_x = 10
+
+    # ----- Parse metadata -----
     frame_id = headers.get("X-Frame-Id", "?")
-    dark = headers.get("X-Dark-Score", "?")
-    night = headers.get("X-Night", "0")
+    dark_score = float(headers.get("X-Dark-Score", 0))
+    night = headers.get("X-Night", "0") == "1"
     ts = headers.get("X-Timestamp", "?")
 
+    # ----- Day / Night indicator -----
+    center = (w - circle_margin - circle_radius, circle_margin + circle_radius)  # top-right
+    color = circle_colors["night"] if night else circle_colors["day"]
+    label = "NIGHT" if night else "DAY"
+
+    cv2.circle(img, center, circle_radius, color, -1)
+    cv2.putText(
+        img,
+        label,
+        (center[0] - 70, center[1] + 8),
+        circle_label_font,
+        circle_label_scale,
+        circle_label_color,
+        circle_label_thickness,
+        cv2.LINE_AA
+    )
+
+    # Dark score
+    cv2.putText(
+        img,
+        f"Brightness {dark_score:.1f}",
+        (center[0] - 150, center[1] + 36),
+        dark_text_font,
+        dark_text_scale,
+        dark_text_color,
+        dark_text_thickness,
+        cv2.LINE_AA
+    )
+
+    # ----- HUD (top-left) -----
     lines = [
         f"Frame: {frame_id}",
-        f"Dark score: {dark}",
-        f"Night: {'YES' if night == '1' else 'NO'}",
         f"Timestamp: {ts}",
     ]
-
-    y = 25
+    y = hud_start_y
     for line in lines:
         cv2.putText(
             img,
             line,
-            (10, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0) if night == "1" else (255, 255, 255),
-            2,
+            (hud_start_x, y),
+            hud_font,
+            hud_scale,
+            hud_color_night if night else hud_color_day,
+            hud_thickness,
             cv2.LINE_AA,
         )
-        y += 30
+        y += hud_line_spacing
 
     return img
-
 
 class OverlayProxyHandler(BaseHTTPRequestHandler):
     def do_GET(self):

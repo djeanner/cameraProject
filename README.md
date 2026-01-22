@@ -1,8 +1,6 @@
 # cameraProject
 
-Python camera control for low-RAM systems featuring ring buffer, day/night detection, night-frame stacking, and MJPEG streaming with metadata suitable for image or object analysis.
-
-Python project for camera control written with assistance of AI. It is specifically designed for systems with little RAM. The ring buffer can be parametrized to reduce image size (allowing one to store more frames). It has two separate criteria for night and day detection based on brightness. Commands are accepted via a line-based TCP protocol (netcat) to save images, test system health, or query brightness for day/night status. The camera also supports MJPEG streaming including per-frame metadata, making the stream usable for object detection or other image analysis pipelines.
+Python camera control for low-RAM systems featuring a configurable ring buffer, day/night detection, night-frame stacking, and MJPEG streaming. A lightweight MJPEG overlay proxy allows real-time display of the video stream with per-frame metadata and optional visual indicators for day/night status and frame brightness, making it suitable for image analysis or object detection workflows.
 
 ---
 
@@ -88,13 +86,41 @@ python3 clientShortStream.py # Short-term stream saving frames to folder (blocks
 ```
     VLC or a browser can connect directly to MJPEG (`http://raspberrypi:8080/stream`) and display live video. Switching between VLC and Python client works safely.
 
-### Stream Port and Client Switching
+Here’s a clean, copy-paste-ready rewrite of the **Streaming** section for your README:
 
-The MJPEG stream runs on **port 8080**. Only one client can actively receive the stream at a time. If you are using VLC to visualize the stream, the Python MJPEG client (`client.py`) will not receive frames simultaneously. To switch:
+---
 
-1. Stop VLC before starting `client.py` to avoid connection refusal or stalls.
-2. Start `client.py` to read the stream and print metadata per frame.
-3. You can safely stop the Python client and restart VLC to resume visualization.  
+### Streaming
+
+The camera service provides an MJPEG stream with per-frame metadata (frame ID, timestamp, dark score, night mode). You can visualize the stream directly or through the **MJPEG overlay proxy**, which adds optional visual indicators such as a day/night circle and dark score overlay on each frame.
+
+**Client options:**
+
+```bash
+python3 client.py
+# Connects to the MJPEG stream, prints metadata per frame, and overlays day/night and dark score indicators
+
+python3 clientShortStream.py
+# Captures short-term sequences of frames to disk, including metadata in filenames;
+# blocks other trigger commands on port 9999
+```
+
+**Overlay proxy port (optional):**
+You can run the overlay proxy on a separate port so VLC or other viewers can display the annotated stream without interfering with triggers or analysis:
+
+```bash
+http://raspberrypi:8090/stream   # Stream with overlay showing day/night and dark score
+```
+
+**Notes:**
+
+* Only one client can actively receive the primary MJPEG stream (port 8080) at a time.
+* Switching between VLC, Python clients, or the overlay proxy is safe and will not disrupt triggers or metadata collection.
+
+---
+
+If you want, I can also **slightly tweak the first paragraph** in the README to reference the overlay proxy right there, so readers see it upfront. Do you want me to do that too?
+
 
 This ensures smooth operation without losing triggers or metadata, while keeping the stream accessible for either analysis (Python client) or display (VLC).
 
@@ -129,3 +155,6 @@ rsync -av --bwlimit=500 --progress dan@raspberrypi:/home/dan/pi_cam_service/capt
 ```
 
 This version reflects metadata streaming, night/day dual thresholds, and frame stacking, while keeping your original ring buffer, triggers, and low-RAM optimization.
+
+
+
