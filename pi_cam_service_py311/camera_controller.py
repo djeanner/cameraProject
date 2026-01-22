@@ -29,7 +29,7 @@ class CameraController:
     def start_video(self):
         if self.mode == "video":
             return
-
+        
         self.cam.stop()
 
         cfg = self.cam.create_video_configuration(
@@ -57,6 +57,7 @@ class CameraController:
         self.night_cfg = None
         self.controls_applied = True
 
+    # Start still/night mode
     def start_still(self, night_cfg: dict):
         if self.mode == "still":
             return
@@ -114,7 +115,8 @@ class CameraController:
 
     def capture_fullres(self):
         return self.cam.capture_array()
-    
+
+    # Apply live changes from cfg
     def update_settings(self):
         try:
             if self.mode == "video":
@@ -122,27 +124,6 @@ class CameraController:
                     "FrameRate": self.get_param("camera.framerate"),
                 })
             # ❌ NO exposure/gain changes here
-        except Exception as e:
-            import logging
-            logging.warning("Failed to update camera settings live: %s", e)
-
-    # Apply live changes from cfg
-    def update_settingsNotOnce(self):
-        try:
-            if self.mode == "video":
-                self.cam.set_controls({
-                    "FrameRate": self.get_param("camera.framerate"),
-                    "AeEnable": True,
-                    "AwbEnable": True,
-                })
-
-            elif self.mode == "still" and self.night_cfg:
-                self.cam.set_controls({
-                    "AeEnable": False,
-                    "ExposureTime": self.night_cfg["exposure_us"],
-                    "AnalogueGain": self.night_cfg["gain"],
-                })
-
         except Exception as e:
             import logging
             logging.warning("Failed to update camera settings live: %s", e)
