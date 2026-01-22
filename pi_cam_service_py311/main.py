@@ -206,6 +206,41 @@ log_mode_change(None, cam.describe_mode())
 def on_trigger(cmd: str, conn=None) -> str:
     cmd = cmd.strip()
     
+    if cmd == "dump_cam_exposure":
+        try:
+            # Force a capture to get fresh metadata
+            _ = cam.cam.capture_array()
+            meta = cam.cam.capture_metadata()
+            return {
+                "ExposureTime": meta.get("ExposureTime"),
+                "AnalogueGain": meta.get("AnalogueGain"),
+                "AeEnable": meta.get("AeEnable"),
+            }
+            
+        except Exception as e:
+            return f"ERROR dumping camera controls: {e}"
+    if cmd == "dump_cam_controls":
+        try:
+            # Force a capture to get fresh metadata
+            _ = cam.cam.capture_array()
+            meta = cam.cam.capture_metadata()
+
+            controls = cam.cam.camera_controls
+            out = {}
+
+            for name, ctrl in controls.items():
+                out[name] = {
+                    "min": getattr(ctrl, "min", None),
+                    "max": getattr(ctrl, "max", None),
+                    "default": getattr(ctrl, "default", None),
+                    "value": meta.get(name, None),
+                }
+
+            return json.dumps(out, indent=2, sort_keys=True)
+
+        except Exception as e:
+            return f"ERROR dumping camera controls: {e}"
+
     if cmd.startswith("set"):
         parts = cmd.split(maxsplit=2)
         if len(parts) < 3:
@@ -452,6 +487,8 @@ while True:
                 "Camera capture slow (%.1fs > %.1fs)",
                 duration, CAPTURE_TIMEOUT
             )
+            
+
 
         event = None
         if ring.buffer:
@@ -472,9 +509,12 @@ while True:
                 cam.start_video()
                 after = cam.describe_mode()
                 log_mode_change(before, after)
-
+                
+            if meta.dark_score > 245 and cam.mode == "video":
+                logging.error("Overexposed frame detected → forcing video reset")
+                cam.start_video()
+                
         # Auto-save logic
-
         now = time.time()
         interval = cfg["export"].get("auto_save_interval_s", 0)
         if interval > 0 and now - last_auto_save >= interval:

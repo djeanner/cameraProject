@@ -75,8 +75,8 @@ echo "set camera.framerate 5" | nc raspberrypi 9999
 echo "set night.bright_threshold 45" | nc raspberrypi 9999 
 echo "dump_config" | nc raspberrypi 9999    # get configure as config.json
 echo "overwrite_config" | nc raspberrypi 9999    # overwrites the config.json with current values
-
-
+echo "dump_cam_controls" | nc raspberrypi 9999
+echo "dump_cam_exposure" | nc raspberrypi 9999
 ```
 
 ### Streaming
